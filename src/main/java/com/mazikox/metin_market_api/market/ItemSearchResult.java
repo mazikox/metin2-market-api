@@ -5,6 +5,7 @@ import java.util.List;
 
 public record ItemSearchResult(
         long listingId, int vnum, String itemName, int quantity, long price, long unitPrice,
+        long totalQuantity, long totalPrice, int listingCount,
         List<ItemAttribute> attributes, List<ItemSocket> sockets, Shop shop, OffsetDateTime observedAt) {
     public record ItemAttribute(int slotIndex, int type, String code, String name, int value,
                                 String displayValue) {}

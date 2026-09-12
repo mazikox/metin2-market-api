@@ -8,14 +8,18 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.util.List;
+
 @Validated
 @RestController
 @RequestMapping("/api/v1/items")
 public class ItemSearchController {
     private final ItemSearchService service;
+    private final MarketCatalogService catalogService;
 
-    public ItemSearchController(ItemSearchService service) {
+    public ItemSearchController(ItemSearchService service, MarketCatalogService catalogService) {
         this.service = service;
+        this.catalogService = catalogService;
     }
 
     @GetMapping
@@ -25,5 +29,18 @@ public class ItemSearchController {
             @RequestParam(defaultValue = "0") @Min(0) int page,
             @RequestParam(defaultValue = "20") @Min(1) @Max(100) int size) {
         return service.search(query.strip(), vnum, page, size);
+    }
+
+    @GetMapping("/suggestions")
+    public ItemSuggestionsResponse suggestions(
+            @RequestParam(defaultValue = "") String query,
+            @RequestParam(required = false) @Min(1) Integer vnum) {
+        return catalogService.suggestions(query.strip(), vnum);
+    }
+
+    @GetMapping("/statistics")
+    public ItemPriceStatisticsResponse statistics(
+            @RequestParam("vnum") List<@Min(1) Integer> vnum) {
+        return catalogService.statistics(vnum.stream().distinct().toList());
     }
 }

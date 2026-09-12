@@ -51,7 +51,13 @@ public class ItemSearchService {
             try {
                 return new ItemSearchResult(rs.getLong("id"), rs.getInt("item_vnum"), rs.getString("item_name"),
                         rs.getInt("quantity"), rs.getLong("price_raw"), rs.getLong("unit_price"),
-                        objectMapper.readValue(rs.getString("attributes"), new TypeReference<>() {}),
+                        objectMapper.<List<RawItemAttribute>>readValue(rs.getString("attributes"), new TypeReference<>() {})
+                                .stream().map(attribute -> {
+                                    ItemBonusCatalog.Details details = ItemBonusCatalog.describe(
+                                            attribute.type(), attribute.value());
+                                    return new ItemSearchResult.ItemAttribute(attribute.slotIndex(), attribute.type(),
+                                            details.code(), details.name(), attribute.value(), details.displayValue());
+                                }).toList(),
                         objectMapper.readValue(rs.getString("sockets"), new TypeReference<>() {}),
                         new ItemSearchResult.Shop((Long) rs.getObject("shop_vid"), rs.getString("shop_title"),
                                 rs.getString("owner_name"), rs.getString("map_id"), (Integer) rs.getObject("channel"),
@@ -65,4 +71,6 @@ public class ItemSearchService {
     }
 
     public record SearchPage(List<ItemSearchResult> items, int page, int size, long totalElements) {}
+
+    private record RawItemAttribute(int slotIndex, int type, int value) {}
 }

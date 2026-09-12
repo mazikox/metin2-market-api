@@ -123,6 +123,11 @@ class MarketApiIntegrationTest {
         assertThat(mergedItem.path("totalQuantity").asLong()).isEqualTo(2);
         assertThat(mergedItem.path("totalPrice").asLong()).isEqualTo(600);
 
+        JsonNode familySearch = getJson(http, "/api/v1/items?vnum=9000&vnum=9009&size=20");
+        assertThat(familySearch.path("totalElements").asLong()).isEqualTo(4);
+        assertThat(familySearch.path("items")).allSatisfy(item ->
+                assertThat(item.path("vnum").asInt()).isIn(9000, 9009));
+
         JsonNode suggestions = getJson(http, "/api/v1/items/suggestions?query=Miecz%20testowy");
         assertThat(suggestions.path("totalMatches").asLong()).isEqualTo(2);
         assertThat(suggestions.path("suggestions").toString()).contains("UPGRADE_FAMILY");
@@ -141,6 +146,19 @@ class MarketApiIntegrationTest {
         assertThat(statistics.path("medianPrice").decimalValue()).isEqualByComparingTo("32");
         assertThat(statistics.path("contributingShopCount").asLong()).isEqualTo(3);
         assertThat(statistics.path("rawOfferCount").asLong()).isEqualTo(4);
+
+        JsonNode familyStatistics = getJson(http, "/api/v1/items/statistics?vnum=777&vnum=9000").path("items");
+        assertThat(familyStatistics).hasSize(2);
+        JsonNode upgradeZeroStatistics = null;
+        for (JsonNode item : familyStatistics) {
+            if (item.path("vnum").asInt() == 9000) {
+                upgradeZeroStatistics = item;
+                break;
+            }
+        }
+        assertThat(upgradeZeroStatistics).isNotNull();
+        assertThat(upgradeZeroStatistics.path("minimumPrice").asLong()).isEqualTo(500);
+        assertThat(upgradeZeroStatistics.path("meanPrice").decimalValue()).isEqualByComparingTo("500");
     }
 
     private JsonNode importPayload(HttpClient http, String payload) throws Exception {

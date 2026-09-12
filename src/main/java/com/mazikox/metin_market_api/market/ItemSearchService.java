@@ -19,10 +19,10 @@ public class ItemSearchService {
         this.objectMapper = objectMapper;
     }
 
-    public SearchPage search(String query, Integer vnum, int page, int size) {
-        String filter = vnum == null
+    public SearchPage search(String query, List<Integer> vnums, int page, int size) {
+        String filter = vnums.isEmpty()
                 ? "lower(l.item_name) LIKE lower(:query)"
-                : "l.item_vnum = :vnum AND lower(l.item_name) LIKE lower(:query)";
+                : "l.item_vnum IN (:vnums) AND lower(l.item_name) LIKE lower(:query)";
         String groupedListings = """
                 WITH matching AS (
                     SELECT l.id, l.observation_id, l.item_vnum, l.item_name, l.quantity,
@@ -61,9 +61,9 @@ public class ItemSearchService {
                 LIMIT :size OFFSET :offset
                 """)
                 .param("query", "%" + query + "%").param("size", size).param("offset", (long) page * size);
-        if (vnum != null) {
-            countSpec = countSpec.param("vnum", vnum);
-            dataSpec = dataSpec.param("vnum", vnum);
+        if (!vnums.isEmpty()) {
+            countSpec = countSpec.param("vnums", vnums);
+            dataSpec = dataSpec.param("vnums", vnums);
         }
         long total = countSpec.query(Long.class).single();
         List<ItemSearchResult> items = dataSpec.query((rs, rowNum) -> {

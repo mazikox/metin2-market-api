@@ -25,10 +25,10 @@ public class ItemSearchController {
     @GetMapping
     public ItemSearchService.SearchPage search(
             @RequestParam(defaultValue = "") String query,
-            @RequestParam(required = false) Integer vnum,
+            @RequestParam(required = false) List<@Min(1) Integer> vnum,
             @RequestParam(defaultValue = "0") @Min(0) int page,
             @RequestParam(defaultValue = "20") @Min(1) @Max(100) int size) {
-        return service.search(query.strip(), vnum, page, size);
+        return service.search(query.strip(), vnum == null ? List.of() : vnum.stream().distinct().toList(), page, size);
     }
 
     @GetMapping("/suggestions")

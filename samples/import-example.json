@@ -1,0 +1,61 @@
+{
+  "sourceId": "eldersuite-pandora-main",
+  "batchId": "sample-batch-001",
+  "runs": [
+    {
+      "runId": "f2b99e98-46d9-443f-9c77-6da9d728d4ff",
+      "startedAt": "2026-09-12T09:34:17.4897455Z",
+      "endedAt": "2026-09-12T09:37:46.0955879Z",
+      "state": 3,
+      "mapId": "metin2_map_a1_summer",
+      "channel": null,
+      "totalTargets": 1339,
+      "visitedTargets": 35,
+      "failedTargets": 33
+    }
+  ],
+  "observations": [
+    {
+      "observationId": "81ac52c5-9df1-40e2-ba32-72ffa6b24906",
+      "runId": "f2b99e98-46d9-443f-9c77-6da9d728d4ff",
+      "shopVid": 47844,
+      "shopTitle": "\u000f",
+      "ownerName": null,
+      "mapId": "metin2_map_a1_summer",
+      "channel": null,
+      "x": 64685.0,
+      "y": 59908.0,
+      "z": 19862.5,
+      "observedAt": "2026-09-12T09:34:18.155Z",
+      "contentFingerprint": "48E5AB1399CDCF5009524E9B82EE90DA3E2B7741F80A2D757D95B5DD134D3BB9",
+      "itemCount": 1,
+      "listings": [
+        {
+          "listingId": 1,
+          "slotIndex": 0,
+          "vnum": 180,
+          "itemName": "Zatruty miecz+0",
+          "count": 1,
+          "priceRaw": 20000000000,
+          "unitPrice": 20000000000,
+          "tailField": 0,
+          "attributes": [
+            {"slotIndex": 0, "attrType": 72, "attrValue": 55},
+            {"slotIndex": 1, "attrType": 71, "attrValue": -25},
+            {"slotIndex": 2, "attrType": 9, "attrValue": 20},
+            {"slotIndex": 3, "attrType": 18, "attrValue": 15},
+            {"slotIndex": 4, "attrType": 16, "attrValue": 5}
+          ],
+          "sockets": [
+            {"socketIndex": 0, "socketValue": 1},
+            {"socketIndex": 1, "socketValue": 1},
+            {"socketIndex": 2, "socketValue": 1},
+            {"socketIndex": 3, "socketValue": 1191196488},
+            {"socketIndex": 4, "socketValue": 336199655},
+            {"socketIndex": 5, "socketValue": 987648}
+          ]
+        }
+      ]
+    }
+  ]
+}

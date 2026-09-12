@@ -1,0 +1,32 @@
+services:
+  postgres:
+    image: postgres:18-alpine
+    environment:
+      POSTGRES_DB: metin_market
+      POSTGRES_USER: metin_market
+      POSTGRES_PASSWORD: metin_market
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-15432}:5432"
+    volumes:
+      - metin-market-postgres-v18:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U metin_market -d metin_market"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  api:
+    build: .
+    environment:
+      DATABASE_URL: jdbc:postgresql://postgres:5432/metin_market
+      DATABASE_USERNAME: metin_market
+      DATABASE_PASSWORD: metin_market
+      SCANNER_TOKEN: ${SCANNER_TOKEN:-local-dev-token}
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  metin-market-postgres-v18:

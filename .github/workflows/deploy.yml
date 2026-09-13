@@ -25,7 +25,7 @@ jobs:
           cache: maven
 
       - name: Run tests
-        run: ./mvnw test
+        run: bash mvnw test
 
   deploy:
     needs: test

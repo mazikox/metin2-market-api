@@ -140,6 +140,22 @@ class MarketApiIntegrationTest {
                 HttpResponse.BodyHandlers.ofString());
         assertThat(cors.headers().firstValue("Access-Control-Allow-Origin")).contains("https://mazikox.pl");
 
+        HttpResponse<String> subdomainCors = http.send(HttpRequest.newBuilder(URI.create("http://localhost:" + port
+                + "/api/v1/items/suggestions?query=Miecz")).header("Origin", "https://pandora.mazikox.pl").GET().build(),
+                HttpResponse.BodyHandlers.ofString());
+        assertThat(subdomainCors.headers().firstValue("Access-Control-Allow-Origin"))
+                .contains("https://pandora.mazikox.pl");
+
+        HttpResponse<String> untrustedCors = http.send(HttpRequest.newBuilder(URI.create("http://localhost:" + port
+                + "/api/v1/items/suggestions?query=Miecz")).header("Origin", "https://untrusted.example").GET().build(),
+                HttpResponse.BodyHandlers.ofString());
+        assertThat(untrustedCors.headers().firstValue("Access-Control-Allow-Origin")).isEmpty();
+
+        HttpResponse<String> importCors = http.send(HttpRequest.newBuilder(URI.create("http://localhost:" + port
+                + "/internal/v1/imports")).header("Origin", "https://mazikox.pl").GET().build(),
+                HttpResponse.BodyHandlers.ofString());
+        assertThat(importCors.headers().firstValue("Access-Control-Allow-Origin")).isEmpty();
+
         JsonNode statistics = getJson(http, "/api/v1/items/statistics?vnum=777").path("items").get(0);
         assertThat(statistics.path("minimumPrice").asLong()).isEqualTo(30);
         assertThat(statistics.path("meanPrice").decimalValue()).isEqualByComparingTo("34");

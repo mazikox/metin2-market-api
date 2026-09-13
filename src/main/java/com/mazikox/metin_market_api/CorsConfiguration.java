@@ -9,16 +9,16 @@ import java.util.List;
 
 @Configuration
 public class CorsConfiguration implements WebMvcConfigurer {
-    private final List<String> allowedOrigins;
+    private final List<String> allowedOriginPatterns;
 
-    public CorsConfiguration(@Value("${app.cors.allowed-origins}") List<String> allowedOrigins) {
-        this.allowedOrigins = List.copyOf(allowedOrigins);
+    public CorsConfiguration(@Value("${app.cors.allowed-origins}") List<String> allowedOriginPatterns) {
+        this.allowedOriginPatterns = List.copyOf(allowedOriginPatterns);
     }
 
     @Override
     public void addCorsMappings(CorsRegistry registry) {
         registry.addMapping("/api/**")
-                .allowedOrigins(allowedOrigins.toArray(String[]::new))
+                .allowedOriginPatterns(allowedOriginPatterns.toArray(String[]::new))
                 .allowedMethods("GET")
                 .allowedHeaders("*");
     }

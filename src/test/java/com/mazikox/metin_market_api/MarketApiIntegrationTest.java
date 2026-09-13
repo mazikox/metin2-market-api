@@ -71,10 +71,23 @@ class MarketApiIntegrationTest {
                 {
                   "sourceId": "market-presentation-test",
                   "batchId": "market-presentation-test-batch",
-                  "runs": [],
+                  "runs": [
+                    {
+                      "runId": "presentation-run-1",
+                      "startedAt": "2026-09-12T10:00:00Z",
+                      "endedAt": "2026-09-12T10:05:00Z",
+                      "state": 3,
+                      "mapId": "test",
+                      "channel": 1,
+                      "totalTargets": 10,
+                      "visitedTargets": 3,
+                      "failedTargets": 0,
+                      "publishable": true
+                    }
+                  ],
                   "observations": [
                     {
-                      "observationId": "presentation-shop-a", "shopVid": 9001, "shopTitle": "A",
+                      "observationId": "presentation-shop-a", "runId": "presentation-run-1", "shopVid": 9001, "shopTitle": "A",
                       "ownerName": "Tester", "mapId": "test", "channel": 1, "x": 1, "y": 1, "z": 0,
                       "observedAt": "2026-09-12T10:00:00Z", "itemCount": 7, "contentFingerprint": "presentation-a",
                       "listings": [
@@ -88,7 +101,7 @@ class MarketApiIntegrationTest {
                       ]
                     },
                     {
-                      "observationId": "presentation-shop-b", "shopVid": 9001, "shopTitle": "B",
+                      "observationId": "presentation-shop-b", "runId": "presentation-run-1", "shopVid": 9001, "shopTitle": "B",
                       "ownerName": "Tester", "mapId": "test", "channel": 1, "x": 2, "y": 2, "z": 0,
                       "observedAt": "2026-09-12T10:01:00Z", "itemCount": 1, "contentFingerprint": "presentation-b",
                       "listings": [
@@ -96,7 +109,7 @@ class MarketApiIntegrationTest {
                       ]
                     },
                     {
-                      "observationId": "presentation-shop-c", "shopVid": 9002, "shopTitle": "C",
+                      "observationId": "presentation-shop-c", "runId": "presentation-run-1", "shopVid": 9002, "shopTitle": "C",
                       "ownerName": "Tester", "mapId": "test", "channel": 1, "x": 3, "y": 3, "z": 0,
                       "observedAt": "2026-09-12T10:02:00Z", "itemCount": 2, "contentFingerprint": "presentation-c",
                       "listings": [
@@ -175,6 +188,216 @@ class MarketApiIntegrationTest {
         assertThat(upgradeZeroStatistics).isNotNull();
         assertThat(upgradeZeroStatistics.path("minimumPrice").asLong()).isEqualTo(500);
         assertThat(upgradeZeroStatistics.path("meanPrice").decimalValue()).isEqualByComparingTo("500");
+    }
+
+    @Test
+    void publicMarketReflectsOnlyLatestCompletedPublishableRun() throws Exception {
+        HttpClient http = HttpClient.newHttpClient();
+
+        // 1. Older full completed run (Run A)
+        importPayload(http, """
+                {
+                  "sourceId": "multi-run-test",
+                  "batchId": "batch-run-a",
+                  "runs": [
+                    {
+                      "runId": "run-a-full-old",
+                      "startedAt": "2026-09-13T10:00:00Z",
+                      "endedAt": "2026-09-13T10:10:00Z",
+                      "state": 3,
+                      "mapId": "map-1",
+                      "channel": 1,
+                      "totalTargets": 100,
+                      "visitedTargets": 100,
+                      "failedTargets": 0,
+                      "publishable": true
+                    }
+                  ],
+                  "observations": [
+                    {
+                      "observationId": "obs-a-1", "runId": "run-a-full-old", "shopVid": 101, "shopTitle": "Shop A1",
+                      "ownerName": "OwnerA1", "mapId": "map-1", "channel": 1, "x": 10, "y": 10, "z": 0,
+                      "observedAt": "2026-09-13T10:02:00Z", "itemCount": 1, "contentFingerprint": "fp-a-1",
+                      "listings": [
+                        {"listingId": 1, "slotIndex": 0, "vnum": 1000, "itemName": "Stary Przedmiot A", "count": 1, "priceRaw": 1000, "unitPrice": 1000, "tailField": 0, "attributes": [], "sockets": []}
+                      ]
+                    },
+                    {
+                      "observationId": "obs-a-2", "runId": "run-a-full-old", "shopVid": 102, "shopTitle": "Shop A2",
+                      "ownerName": "OwnerA2", "mapId": "map-1", "channel": 1, "x": 20, "y": 20, "z": 0,
+                      "observedAt": "2026-09-13T10:04:00Z", "itemCount": 1, "contentFingerprint": "fp-a-2",
+                      "listings": [
+                        {"listingId": 1, "slotIndex": 0, "vnum": 2000, "itemName": "Stary Przedmiot B", "count": 1, "priceRaw": 2000, "unitPrice": 2000, "tailField": 0, "attributes": [], "sockets": []}
+                      ]
+                    }
+                  ]
+                }
+                """);
+
+        // 2. Newer full completed run (Run B)
+        importPayload(http, """
+                {
+                  "sourceId": "multi-run-test",
+                  "batchId": "batch-run-b",
+                  "runs": [
+                    {
+                      "runId": "run-b-full-new",
+                      "startedAt": "2026-09-13T12:00:00Z",
+                      "endedAt": "2026-09-13T12:10:00Z",
+                      "state": 3,
+                      "mapId": "map-1",
+                      "channel": 1,
+                      "totalTargets": 100,
+                      "visitedTargets": 100,
+                      "failedTargets": 0,
+                      "publishable": true
+                    }
+                  ],
+                  "observations": [
+                    {
+                      "observationId": "obs-b-1", "runId": "run-b-full-new", "shopVid": 201, "shopTitle": "Shop B1",
+                      "ownerName": "OwnerB1", "mapId": "map-1", "channel": 1, "x": 30, "y": 30, "z": 0,
+                      "observedAt": "2026-09-13T12:02:00Z", "itemCount": 1, "contentFingerprint": "fp-b-1",
+                      "listings": [
+                        {"listingId": 1, "slotIndex": 0, "vnum": 1000, "itemName": "Stary Przedmiot A", "count": 1, "priceRaw": 800, "unitPrice": 800, "tailField": 0, "attributes": [], "sockets": []}
+                      ]
+                    },
+                    {
+                      "observationId": "obs-b-2", "runId": "run-b-full-new", "shopVid": 202, "shopTitle": "Shop B2",
+                      "ownerName": "OwnerB2", "mapId": "map-1", "channel": 1, "x": 40, "y": 40, "z": 0,
+                      "observedAt": "2026-09-13T12:04:00Z", "itemCount": 1, "contentFingerprint": "fp-b-2",
+                      "listings": [
+                        {"listingId": 1, "slotIndex": 0, "vnum": 3000, "itemName": "Nowy Przedmiot C", "count": 1, "priceRaw": 5000, "unitPrice": 5000, "tailField": 0, "attributes": [], "sockets": []}
+                      ]
+                    },
+                    {
+                      "observationId": "obs-b-3", "runId": "run-b-full-new", "shopVid": 203, "shopTitle": "Shop B3",
+                      "ownerName": "OwnerB3", "mapId": "map-1", "channel": 1, "x": 50, "y": 50, "z": 0,
+                      "observedAt": "2026-09-13T12:06:00Z", "itemCount": 1, "contentFingerprint": "fp-b-3",
+                      "listings": [
+                        {"listingId": 1, "slotIndex": 0, "vnum": 3000, "itemName": "Nowy Przedmiot C", "count": 1, "priceRaw": 6000, "unitPrice": 6000, "tailField": 0, "attributes": [], "sockets": []}
+                      ]
+                    }
+                  ]
+                }
+                """);
+
+        // 3. Newer partial completed run (Run C, publishable=false)
+        importPayload(http, """
+                {
+                  "sourceId": "multi-run-test",
+                  "batchId": "batch-run-c",
+                  "runs": [
+                    {
+                      "runId": "run-c-partial-new",
+                      "startedAt": "2026-09-13T14:00:00Z",
+                      "endedAt": "2026-09-13T14:05:00Z",
+                      "state": 3,
+                      "mapId": "map-1",
+                      "channel": 1,
+                      "totalTargets": 10,
+                      "visitedTargets": 10,
+                      "failedTargets": 0,
+                      "publishable": false
+                    }
+                  ],
+                  "observations": [
+                    {
+                      "observationId": "obs-c-1", "runId": "run-c-partial-new", "shopVid": 301, "shopTitle": "Shop C1",
+                      "ownerName": "OwnerC1", "mapId": "map-1", "channel": 1, "x": 60, "y": 60, "z": 0,
+                      "observedAt": "2026-09-13T14:02:00Z", "itemCount": 1, "contentFingerprint": "fp-c-1",
+                      "listings": [
+                        {"listingId": 1, "slotIndex": 0, "vnum": 1000, "itemName": "Stary Przedmiot A", "count": 1, "priceRaw": 100, "unitPrice": 100, "tailField": 0, "attributes": [], "sockets": []}
+                      ]
+                    },
+                    {
+                      "observationId": "obs-c-2", "runId": "run-c-partial-new", "shopVid": 302, "shopTitle": "Shop C2",
+                      "ownerName": "OwnerC2", "mapId": "map-1", "channel": 1, "x": 70, "y": 70, "z": 0,
+                      "observedAt": "2026-09-13T14:03:00Z", "itemCount": 1, "contentFingerprint": "fp-c-2",
+                      "listings": [
+                        {"listingId": 1, "slotIndex": 0, "vnum": 4000, "itemName": "Czesciowy Przedmiot D", "count": 1, "priceRaw": 50, "unitPrice": 50, "tailField": 0, "attributes": [], "sockets": []}
+                      ]
+                    }
+                  ]
+                }
+                """);
+
+        // 4. Newer failed run (Run D, state=4, publishable=true)
+        importPayload(http, """
+                {
+                  "sourceId": "multi-run-test",
+                  "batchId": "batch-run-d",
+                  "runs": [
+                    {
+                      "runId": "run-d-failed-new",
+                      "startedAt": "2026-09-13T16:00:00Z",
+                      "endedAt": "2026-09-13T16:05:00Z",
+                      "state": 4,
+                      "mapId": "map-1",
+                      "channel": 1,
+                      "totalTargets": 50,
+                      "visitedTargets": 5,
+                      "failedTargets": 45,
+                      "publishable": true
+                    }
+                  ],
+                  "observations": [
+                    {
+                      "observationId": "obs-d-1", "runId": "run-d-failed-new", "shopVid": 401, "shopTitle": "Shop D1",
+                      "ownerName": "OwnerD1", "mapId": "map-1", "channel": 1, "x": 80, "y": 80, "z": 0,
+                      "observedAt": "2026-09-13T16:02:00Z", "itemCount": 1, "contentFingerprint": "fp-d-1",
+                      "listings": [
+                        {"listingId": 1, "slotIndex": 0, "vnum": 1000, "itemName": "Stary Przedmiot A", "count": 1, "priceRaw": 10, "unitPrice": 10, "tailField": 0, "attributes": [], "sockets": []}
+                      ]
+                    }
+                  ]
+                }
+                """);
+
+        // Verify offers in public search reflect strictly Run B (the latest completed full/publishable run)
+        JsonNode searchA = getJson(http, "/api/v1/items?query=Stary%20Przedmiot%20A");
+        assertThat(searchA.path("totalElements").asLong()).isEqualTo(1);
+        assertThat(searchA.path("items").get(0).path("price").asLong()).isEqualTo(800);
+        assertThat(searchA.path("items").get(0).path("shop").path("shopTitle").asText()).isEqualTo("Shop B1");
+
+        // Verify older full run's exclusive item (vnum 2000) is no longer present
+        JsonNode searchOld = getJson(http, "/api/v1/items?vnum=2000");
+        assertThat(searchOld.path("totalElements").asLong()).isEqualTo(0);
+
+        // Verify partial run's item (vnum 4000) is NOT present in search
+        JsonNode searchPartial = getJson(http, "/api/v1/items?vnum=4000");
+        assertThat(searchPartial.path("totalElements").asLong()).isEqualTo(0);
+
+        // Verify statistics for vnum 1000 reflect strictly Run B
+        JsonNode stats1000 = getJson(http, "/api/v1/items/statistics?vnum=1000").path("items").get(0);
+        assertThat(stats1000.path("minimumPrice").asLong()).isEqualTo(800);
+        assertThat(stats1000.path("meanPrice").decimalValue()).isEqualByComparingTo("800");
+        assertThat(stats1000.path("medianPrice").decimalValue()).isEqualByComparingTo("800");
+        assertThat(stats1000.path("contributingShopCount").asLong()).isEqualTo(1);
+        assertThat(stats1000.path("rawOfferCount").asLong()).isEqualTo(1);
+
+        // Verify statistics for vnum 3000 from Run B
+        JsonNode stats3000 = getJson(http, "/api/v1/items/statistics?vnum=3000").path("items").get(0);
+        assertThat(stats3000.path("minimumPrice").asLong()).isEqualTo(5000);
+        assertThat(stats3000.path("meanPrice").decimalValue()).isEqualByComparingTo("5500");
+        assertThat(stats3000.path("medianPrice").decimalValue()).isEqualByComparingTo("5500");
+        assertThat(stats3000.path("contributingShopCount").asLong()).isEqualTo(2);
+        assertThat(stats3000.path("rawOfferCount").asLong()).isEqualTo(2);
+
+        // Verify multi-VNUM search returns offers across vnum 1000 and 3000 within Run B
+        JsonNode multiVnumSearch = getJson(http, "/api/v1/items?vnum=1000&vnum=3000&size=20");
+        assertThat(multiVnumSearch.path("totalElements").asLong()).isEqualTo(3);
+        assertThat(multiVnumSearch.path("items")).extracting(item -> item.path("vnum").asInt())
+                .containsExactlyInAnyOrder(1000, 3000, 3000);
+
+        // Verify multi-VNUM statistics
+        JsonNode multiVnumStats = getJson(http, "/api/v1/items/statistics?vnum=1000&vnum=3000").path("items");
+        assertThat(multiVnumStats).hasSize(2);
+
+        // Verify suggestions include items from all runs across the historical catalog
+        JsonNode suggestions = getJson(http, "/api/v1/items/suggestions?query=Czesciowy");
+        assertThat(suggestions.path("totalMatches").asLong()).isEqualTo(1);
+        assertThat(suggestions.path("suggestions").get(0).path("name").asText()).isEqualTo("Czesciowy Przedmiot D");
     }
 
     private JsonNode importPayload(HttpClient http, String payload) throws Exception {

@@ -47,9 +47,9 @@ public class ImportService {
             importedRuns += jdbc.sql("""
                     INSERT INTO scan_run
                         (source_id, source_run_id, started_at, ended_at, state, map_id, channel,
-                         total_targets, visited_targets, failed_targets)
+                         total_targets, visited_targets, failed_targets, publishable)
                     VALUES (:sourceId, :runId, :startedAt, :endedAt, :state, :mapId, :channel,
-                            :totalTargets, :visitedTargets, :failedTargets)
+                            :totalTargets, :visitedTargets, :failedTargets, :publishable)
                     ON CONFLICT (source_id, source_run_id) DO UPDATE SET
                         ended_at = EXCLUDED.ended_at,
                         state = EXCLUDED.state,
@@ -57,14 +57,16 @@ public class ImportService {
                         channel = EXCLUDED.channel,
                         total_targets = EXCLUDED.total_targets,
                         visited_targets = EXCLUDED.visited_targets,
-                        failed_targets = EXCLUDED.failed_targets
+                        failed_targets = EXCLUDED.failed_targets,
+                        publishable = EXCLUDED.publishable
                     """)
                     .params(params(
                             "sourceId", request.sourceId(), "runId", run.runId(),
                             "startedAt", run.startedAt(), "endedAt", run.endedAt(),
                             "state", run.state(), "mapId", run.mapId(),
                             "channel", run.channel(), "totalTargets", run.totalTargets(),
-                            "visitedTargets", run.visitedTargets(), "failedTargets", run.failedTargets()))
+                            "visitedTargets", run.visitedTargets(), "failedTargets", run.failedTargets(),
+                            "publishable", run.isPublishable()))
                     .update();
         }
 

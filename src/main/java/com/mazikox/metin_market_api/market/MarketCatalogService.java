@@ -73,11 +73,18 @@ public class MarketCatalogService {
     public ItemPriceStatisticsResponse statistics(List<Integer> vnums) {
         String placeholders = String.join(", ", vnums.stream().map(vnum -> ":vnum" + vnum).toList());
         var query = jdbc.sql("""
-                WITH per_shop AS (
+                WITH latest_run AS (
+                    SELECT id FROM scan_run
+                    WHERE state = 3 AND publishable = true
+                    ORDER BY ended_at DESC NULLS LAST, started_at DESC, id DESC
+                    LIMIT 1
+                ), per_shop AS (
                     SELECT l.item_vnum, min(l.item_name) AS item_name, l.observation_id,
                            min(l.unit_price) AS cheapest_unit_price, count(*) AS raw_offer_count,
                            sum(l.quantity)::bigint AS total_quantity
-                    FROM shop_listing l
+                    FROM latest_run r
+                    JOIN shop_observation o ON o.scan_run_id = r.id
+                    JOIN shop_listing l ON l.observation_id = o.id
                     WHERE l.item_vnum IN (%s)
                     GROUP BY l.item_vnum, l.observation_id
                 )

@@ -11,7 +11,8 @@
       "channel": null,
       "totalTargets": 1339,
       "visitedTargets": 35,
-      "failedTargets": 33
+      "failedTargets": 33,
+      "publishable": true
     }
   ],
   "observations": [

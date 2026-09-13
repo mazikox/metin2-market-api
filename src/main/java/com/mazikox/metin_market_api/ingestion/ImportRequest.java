@@ -24,7 +24,12 @@ public record ImportRequest(
             Integer channel,
             @PositiveOrZero int totalTargets,
             @PositiveOrZero int visitedTargets,
-            @PositiveOrZero int failedTargets) {}
+            @PositiveOrZero int failedTargets,
+            Boolean publishable) {
+        public boolean isPublishable() {
+            return Boolean.TRUE.equals(publishable);
+        }
+    }
 
     public record Observation(
             @NotBlank String observationId,

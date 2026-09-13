@@ -24,7 +24,12 @@ public class ItemSearchService {
                 ? "lower(l.item_name) LIKE lower(:query)"
                 : "l.item_vnum IN (:vnums) AND lower(l.item_name) LIKE lower(:query)";
         String groupedListings = """
-                WITH matching AS (
+                WITH latest_run AS (
+                    SELECT id FROM scan_run
+                    WHERE state = 3 AND publishable = true
+                    ORDER BY ended_at DESC NULLS LAST, started_at DESC, id DESC
+                    LIMIT 1
+                ), matching AS (
                     SELECT l.id, l.observation_id, l.item_vnum, l.item_name, l.quantity,
                            l.price_raw, l.unit_price, l.tail_field,
                            o.shop_vid, o.shop_title, o.owner_name, o.map_id, o.channel,
@@ -37,8 +42,9 @@ public class ItemSearchService {
                                'socketIndex', s.socket_index, 'value', s.socket_value)
                                ORDER BY s.socket_index)
                                FROM shop_listing_socket s WHERE s.listing_id = l.id), '[]'::jsonb) AS sockets
-                    FROM shop_listing l
-                    JOIN shop_observation o ON o.id = l.observation_id
+                    FROM latest_run r
+                    JOIN shop_observation o ON o.scan_run_id = r.id
+                    JOIN shop_listing l ON l.observation_id = o.id
                     WHERE %s
                 ), aggregated AS (
                     SELECT min(id) AS listing_id, item_vnum, item_name, quantity, price_raw, unit_price,

@@ -1,0 +1,72 @@
+name: Deploy backend
+
+on:
+  push:
+    branches:
+      - main
+
+concurrency:
+  group: production-backend
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "26"
+          cache: maven
+
+      - name: Run tests
+        run: ./mvnw test
+
+  deploy:
+    needs: test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Configure SSH
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          printf '%s\n' "$VPS_SSH_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -H "$VPS_HOST" >> ~/.ssh/known_hosts
+
+      - name: Deploy
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+        run: |
+          ssh "$VPS_USER@$VPS_HOST" '
+            set -e
+            cd ~/metin2-market-api
+            git fetch origin main
+            git reset --hard origin/main
+            sudo docker compose up -d --build
+          '
+
+      - name: Health check
+        run: |
+          for i in {1..12}; do
+            if curl --fail --silent --show-error \
+              "https://api.mazikox.pl/api/v1/items?page=0&size=1" > /dev/null; then
+              echo "API healthy"
+              exit 0
+            fi
+
+            sleep 5
+          done
+
+          echo "API health check failed"
+          exit 1

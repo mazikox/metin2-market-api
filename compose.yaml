@@ -4,7 +4,7 @@ services:
     environment:
       POSTGRES_DB: metin_market
       POSTGRES_USER: metin_market
-      POSTGRES_PASSWORD: metin_market
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
     ports:
       - "127.0.0.1:${POSTGRES_PORT:-15432}:5432"
     volumes:
@@ -20,7 +20,7 @@ services:
     environment:
       DATABASE_URL: jdbc:postgresql://postgres:5432/metin_market
       DATABASE_USERNAME: metin_market
-      DATABASE_PASSWORD: metin_market
+      DATABASE_PASSWORD: ${POSTGRES_PASSWORD}
       SCANNER_TOKEN: ${SCANNER_TOKEN:-local-dev-token}
     ports:
       - "8080:8080"

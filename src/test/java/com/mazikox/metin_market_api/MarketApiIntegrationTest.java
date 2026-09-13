@@ -1,10 +1,12 @@
 package com.mazikox.metin_market_api;
 
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.core.io.ClassPathResource;
+import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.testcontainers.postgresql.PostgreSQLContainer;
@@ -33,7 +35,13 @@ class MarketApiIntegrationTest {
     }
 
     @Autowired ObjectMapper objectMapper;
+    @Autowired JdbcClient jdbc;
     @Value("${local.server.port}") int port;
+
+    @BeforeEach
+    void cleanDatabase() {
+        jdbc.sql("TRUNCATE shop_listing_socket, shop_listing_attribute, shop_listing, shop_observation, scan_run, synchronization_batch CASCADE").update();
+    }
 
     @Test
     void importsRetriesWithoutDuplicatesAndSearchesWithShopDetails() throws Exception {
@@ -358,7 +366,7 @@ class MarketApiIntegrationTest {
         JsonNode searchA = getJson(http, "/api/v1/items?query=Stary%20Przedmiot%20A");
         assertThat(searchA.path("totalElements").asLong()).isEqualTo(1);
         assertThat(searchA.path("items").get(0).path("price").asLong()).isEqualTo(800);
-        assertThat(searchA.path("items").get(0).path("shop").path("shopTitle").asText()).isEqualTo("Shop B1");
+        assertThat(searchA.path("items").get(0).path("shop").path("title").asText()).isEqualTo("Shop B1");
 
         // Verify older full run's exclusive item (vnum 2000) is no longer present
         JsonNode searchOld = getJson(http, "/api/v1/items?vnum=2000");

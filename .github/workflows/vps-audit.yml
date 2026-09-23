@@ -1,0 +1,73 @@
+name: VPS Security Audit
+
+on:
+  push:
+    branches:
+      - security-hardening
+  workflow_dispatch:
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Configure SSH
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_SSH_KEY: ${{ secrets.VPS_SSH_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          printf '%s\n' "$VPS_SSH_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          ssh-keyscan -H "$VPS_HOST" >> ~/.ssh/known_hosts
+
+      - name: Run Read-Only Security Audit Commands
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+        run: |
+          ssh "$VPS_USER@$VPS_HOST" '
+            echo "==================== 1. LISTENING PORTS (sudo ss -tulpn) ===================="
+            sudo ss -tulpn
+
+            echo "==================== 2. UFW STATUS (sudo ufw status verbose) ===================="
+            sudo ufw status verbose 2>&1 || true
+
+            echo "==================== 3. NGINX CONFIGURATION (sudo nginx -T) ===================="
+            sudo nginx -T 2>&1 || true
+            echo "--- Checking Caddy / other proxy configs ---"
+            sudo systemctl status caddy --no-pager 2>&1 || true
+            if [ -f /etc/caddy/Caddyfile ]; then
+              echo "--- /etc/caddy/Caddyfile ---"
+              sudo cat /etc/caddy/Caddyfile 2>&1 || true
+            fi
+
+            echo "==================== 4. RUNNING CONTAINERS (docker ps) ===================="
+            sudo docker ps
+
+            echo "==================== 5. DOCKER COMPOSE STATUS ===================="
+            if [ -d ~/metin2-market-api ]; then
+              cd ~/metin2-market-api && sudo docker compose ps
+            elif [ -d /root/metin2-market-api ]; then
+              cd /root/metin2-market-api && sudo docker compose ps
+            fi
+
+            echo "==================== 6. .ENV FILE PERMISSIONS (NO SECRETS) ===================="
+            for dir in ~/metin2-market-api /root/metin2-market-api /opt/metin2-market-api; do
+              if [ -f "$dir/.env" ]; then
+                echo "Found .env in $dir:"
+                ls -la "$dir/.env" | awk "{print \$1, \$2, \$3, \$4, \$5, \$6, \$7, \$8, \$9}"
+              fi
+            done
+
+            echo "==================== 7. SSH CONFIGURATION ===================="
+            echo "--- Active sshd settings (sshd -T) ---"
+            sudo sshd -T 2>/dev/null | grep -iE "^(passwordauthentication|permitrootlogin)" || true
+            echo "--- /etc/ssh/sshd_config entries ---"
+            sudo grep -iE "^\s*(PasswordAuthentication|PermitRootLogin)" /etc/ssh/sshd_config /etc/ssh/sshd_config.d/* 2>/dev/null || true
+
+            echo "==================== 8. TLS / CERTIFICATES ===================="
+            sudo certbot certificates 2>&1 || true
+            echo "=== AUDIT COMPLETED ==="
+          '

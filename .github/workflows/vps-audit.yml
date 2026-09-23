@@ -1,4 +1,4 @@
-name: VPS Security Audit
+name: VPS Post-Deploy Verification
 
 on:
   push:
@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
 
 jobs:
-  audit:
+  verify-post-deploy:
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -27,36 +27,33 @@ jobs:
           chmod 600 ~/.ssh/id_ed25519
           ssh-keyscan -H "$VPS_HOST" >> ~/.ssh/known_hosts
 
-      - name: Check .env variables presence (NO VALUES)
+      - name: Run Verification Commands
         env:
           VPS_HOST: ${{ secrets.VPS_HOST }}
           VPS_USER: ${{ secrets.VPS_USER }}
         run: |
           ssh "$VPS_USER@$VPS_HOST" '
-            ENV_FILE="/home/debian/metin2-market-api/.env"
-            if [ -f "$ENV_FILE" ]; then
-              if sudo grep -qE "^POSTGRES_PASSWORD=" "$ENV_FILE"; then
-                echo "POSTGRES_PASSWORD: PRESENT"
-              else
-                echo "POSTGRES_PASSWORD: MISSING"
-              fi
+            echo "==================== 1. sudo ss -tulpn ===================="
+            sudo ss -tulpn
 
-              if sudo grep -qE "^SCANNER_TOKEN=" "$ENV_FILE"; then
-                echo "SCANNER_TOKEN: PRESENT"
-              else
-                echo "SCANNER_TOKEN: MISSING"
-              fi
-            else
-              echo "POSTGRES_PASSWORD: MISSING"
-              echo "SCANNER_TOKEN: MISSING"
-            fi
-          ' > env_check_result.txt
+            echo "==================== 2. docker ps ===================="
+            sudo docker ps
+
+            echo "==================== 3. docker compose ps w /home/debian/metin2-market-api ===================="
+            cd /home/debian/metin2-market-api && sudo docker compose ps
+
+            echo "==================== 4. curl -I https://api.mazikox.pl/api/v1/items?page=0&size=1 ===================="
+            curl -I "https://api.mazikox.pl/api/v1/items?page=0&size=1"
+
+            echo "==================== 5. curl -I http://127.0.0.1:8080/api/v1/items?page=0&size=1 ===================="
+            curl -I "http://127.0.0.1:8080/api/v1/items?page=0&size=1"
+          ' > post_deploy_verification.txt
 
       - name: Save Result to Branch
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git checkout -B vps-audit-data
-          git add env_check_result.txt
-          git commit -m "chore: check env presence"
+          git add post_deploy_verification.txt
+          git commit -m "chore: save post deploy verification"
           git push --force origin vps-audit-data

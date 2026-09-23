@@ -408,6 +408,39 @@ class MarketApiIntegrationTest {
         assertThat(suggestions.path("suggestions").get(0).path("name").asText()).isEqualTo("Czesciowy Przedmiot D");
     }
 
+    @Test
+    void rejectsExceedingLimitsAndReturnsBadRequest() throws Exception {
+        HttpClient http = HttpClient.newHttpClient();
+
+        // 101 vnums in search -> 400 Bad Request
+        StringBuilder searchVnums = new StringBuilder("/api/v1/items?");
+        for (int i = 1; i <= 101; i++) {
+            if (i > 1) searchVnums.append("&");
+            searchVnums.append("vnum=").append(i);
+        }
+        HttpResponse<String> searchResp = http.send(HttpRequest.newBuilder(
+                URI.create("http://localhost:" + port + searchVnums)).GET().build(),
+                HttpResponse.BodyHandlers.ofString());
+        assertThat(searchResp.statusCode()).isEqualTo(400);
+
+        // Page size > 100 -> 400 Bad Request
+        HttpResponse<String> sizeResp = http.send(HttpRequest.newBuilder(
+                URI.create("http://localhost:" + port + "/api/v1/items?size=101")).GET().build(),
+                HttpResponse.BodyHandlers.ofString());
+        assertThat(sizeResp.statusCode()).isEqualTo(400);
+
+        // 101 vnums in statistics -> 400 Bad Request
+        StringBuilder statsVnums = new StringBuilder("/api/v1/items/statistics?");
+        for (int i = 1; i <= 101; i++) {
+            if (i > 1) statsVnums.append("&");
+            statsVnums.append("vnum=").append(i);
+        }
+        HttpResponse<String> statsResp = http.send(HttpRequest.newBuilder(
+                URI.create("http://localhost:" + port + statsVnums)).GET().build(),
+                HttpResponse.BodyHandlers.ofString());
+        assertThat(statsResp.statusCode()).isEqualTo(400);
+    }
+
     private JsonNode importPayload(HttpClient http, String payload) throws Exception {
         HttpRequest request = HttpRequest.newBuilder(URI.create("http://localhost:" + port + "/internal/v1/imports"))
                 .header("X-Scanner-Token", "test-token").header("Content-Type", "application/json")

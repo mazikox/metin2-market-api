@@ -34,9 +34,12 @@ jobs:
             echo "==================== 2. UFW STATUS (sudo ufw status verbose) ===================="
             sudo ufw status verbose 2>&1 || true
 
-            echo "==================== 3. NGINX CONFIGURATION (sudo nginx -T) ===================="
+            echo "==================== 3. NGINX / CADDY CONFIGURATION ===================="
+            echo "--- Nginx test (sudo nginx -T) ---"
             sudo nginx -T 2>&1 || true
-            echo "--- Checking Caddy / other proxy configs ---"
+            echo "--- Nginx systemd status ---"
+            sudo systemctl status nginx --no-pager 2>&1 || true
+            echo "--- Caddy systemd status ---"
             sudo systemctl status caddy --no-pager 2>&1 || true
             if [ -f /etc/caddy/Caddyfile ]; then
               echo "--- /etc/caddy/Caddyfile ---"
@@ -47,14 +50,15 @@ jobs:
             sudo docker ps
 
             echo "==================== 5. DOCKER COMPOSE STATUS ===================="
-            if [ -d ~/metin2-market-api ]; then
-              cd ~/metin2-market-api && sudo docker compose ps
-            elif [ -d /root/metin2-market-api ]; then
-              cd /root/metin2-market-api && sudo docker compose ps
-            fi
+            for dir in ~/metin2-market-api /root/metin2-market-api /home/*/metin2-market-api; do
+              if [ -d "$dir" ]; then
+                echo "Compose dir found: $dir"
+                cd "$dir" && sudo docker compose ps
+              fi
+            done
 
             echo "==================== 6. .ENV FILE PERMISSIONS (NO SECRETS) ===================="
-            for dir in ~/metin2-market-api /root/metin2-market-api /opt/metin2-market-api; do
+            for dir in ~/metin2-market-api /root/metin2-market-api /home/*/metin2-market-api; do
               if [ -f "$dir/.env" ]; then
                 echo "Found .env in $dir:"
                 ls -la "$dir/.env" | awk "{print \$1, \$2, \$3, \$4, \$5, \$6, \$7, \$8, \$9}"
@@ -70,4 +74,10 @@ jobs:
             echo "==================== 8. TLS / CERTIFICATES ===================="
             sudo certbot certificates 2>&1 || true
             echo "=== AUDIT COMPLETED ==="
-          '
+          ' > audit_report.txt
+
+      - name: Upload Audit Report Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: vps-audit-report
+          path: audit_report.txt

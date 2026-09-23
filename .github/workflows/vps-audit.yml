@@ -9,8 +9,13 @@ on:
 jobs:
   audit:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
 
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
       - name: Configure SSH
         env:
           VPS_HOST: ${{ secrets.VPS_HOST }}
@@ -45,6 +50,10 @@ jobs:
               echo "--- /etc/caddy/Caddyfile ---"
               sudo cat /etc/caddy/Caddyfile 2>&1 || true
             fi
+            if [ -d /etc/nginx/sites-enabled ]; then
+              echo "--- /etc/nginx/sites-enabled ---"
+              sudo cat /etc/nginx/sites-enabled/* 2>&1 || true
+            fi
 
             echo "==================== 4. RUNNING CONTAINERS (docker ps) ===================="
             sudo docker ps
@@ -76,8 +85,11 @@ jobs:
             echo "=== AUDIT COMPLETED ==="
           ' > audit_report.txt
 
-      - name: Upload Audit Report Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: vps-audit-report
-          path: audit_report.txt
+      - name: Save Audit Report to Branch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout -B vps-audit-data
+          git add audit_report.txt
+          git commit -m "chore: save vps audit report"
+          git push --force origin vps-audit-data

@@ -1,0 +1,50 @@
+name: Security Hardening Verification
+
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - security-hardening
+  workflow_dispatch:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "26"
+          cache: maven
+
+      - name: Make mvnw executable
+        run: chmod +x mvnw
+
+      - name: Run full tests (including Testcontainers PostgreSQL)
+        run: ./mvnw clean test
+
+      - name: Build Docker image
+        run: docker build -t metin-market-api:security-test .
+
+      - name: Verify container user is non-root
+        run: |
+          USER_ID_OUTPUT=$(docker run --rm --entrypoint id metin-market-api:security-test)
+          echo "Container user: $USER_ID_OUTPUT"
+          if echo "$USER_ID_OUTPUT" | grep -q "uid=0"; then
+            echo "Security check failed: container process is running as root (UID 0)"
+            exit 1
+          fi
+
+      - name: Verify Docker Compose configuration
+        env:
+          POSTGRES_PASSWORD: test_postgres_password_123
+          SCANNER_TOKEN: test_scanner_token_456
+        run: |
+          docker compose config

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sqlite3
 import sys
 from collections import defaultdict
@@ -17,16 +18,23 @@ DEFAULT_DATABASE = Path("samples/eldersuite-history-pandora.db")
 DEFAULT_API_URL = "http://localhost:8080"
 DEFAULT_SOURCE_ID = "eldersuite-pandora-main"
 STATE_COMPLETED = 3
+SERVERS = ("pandora", "elder", "beavium")
+TOKEN_ENVIRONMENT = {
+    "pandora": "SCANNER_TOKEN",
+    "elder": "SCANNER_TOKEN_ELDER",
+    "beavium": "SCANNER_TOKEN_BEAVIUM",
+}
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Import a single completed market scan run from SQLite through the ingestion HTTP API."
     )
-    parser.add_argument("--database", type=Path, default=DEFAULT_DATABASE, help="Path to SQLite database file")
+    parser.add_argument("--server", choices=SERVERS, default="pandora", help="Game server receiving this import")
+    parser.add_argument("--database", type=Path, help="Path to SQLite database file")
     parser.add_argument("--api-url", default=DEFAULT_API_URL, help="Base URL of Metin Market API")
-    parser.add_argument("--token", default="local-dev-token", help="Scanner ingestion security token")
-    parser.add_argument("--source-id", default=DEFAULT_SOURCE_ID, help="Source identifier")
+    parser.add_argument("--token", help="Scanner token; otherwise read from the environment variable for --server")
+    parser.add_argument("--source-id", help="Source identifier (defaults to the existing Pandora source only)")
     parser.add_argument("--batch-size", type=int, default=20, help="Number of observations per batch")
 
     group = parser.add_mutually_exclusive_group(required=True)
@@ -54,9 +62,18 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def find_newest_run(connection: sqlite3.Connection) -> dict | None:
+    row = connection.execute(
+        "SELECT * FROM shop_scan_run "
+        "ORDER BY datetime(COALESCE(ended_at, started_at)) DESC, started_at DESC, run_id DESC "
+        "LIMIT 1"
+    ).fetchone()
+    return dict(row) if row else None
+
+
 def select_target_run(
     connection: sqlite3.Connection, run_id: str | None, latest_completed: bool, force_completed: bool
-) -> tuple[dict, bool]:
+) -> dict:
     if force_completed and not run_id:
         raise RuntimeError("--force-completed requires explicit --run-id <id>")
 
@@ -70,7 +87,7 @@ def select_target_run(
         ).fetchone()
         if not row:
             raise RuntimeError("No completed scan runs found in SQLite database (state=3)")
-        return dict(row), False
+        return dict(row)
 
     if run_id:
         row = connection.execute(
@@ -79,24 +96,154 @@ def select_target_run(
         ).fetchone()
         if not row:
             raise RuntimeError(f"Scan run '{run_id}' does not exist in SQLite database")
-        
-        is_forced = False
-        if row["state"] != STATE_COMPLETED:
-            if not force_completed:
-                raise RuntimeError(
-                    f"Scan run '{run_id}' is not completed (state={row['state']}, ended_at={row['ended_at']}). "
-                    f"Expected state={STATE_COMPLETED} (COMPLETED). Use --force-completed with --run-id to override."
-                )
-            is_forced = True
-
-        return dict(row), is_forced
+        return dict(row)
 
     raise RuntimeError("Either --latest-completed or --run-id <id> must be specified")
 
 
+def load_run_payload_and_observations(
+    connection: sqlite3.Connection,
+    run_row: sqlite3.Row | dict,
+    publishable: bool = False,
+    force_completed: bool = False,
+) -> tuple[dict, list[dict], dict[str, int], bool]:
+    target_run_id = run_row["run_id"]
+    is_forced = False
+
+    if run_row["state"] != STATE_COMPLETED:
+        if not force_completed:
+            raise RuntimeError(
+                f"Scan run '{target_run_id}' is not completed (state={run_row['state']}, ended_at={run_row['ended_at']}). "
+                f"Expected state={STATE_COMPLETED} (COMPLETED). Use --force-completed with --run-id to override."
+            )
+        is_forced = True
+
+    ended_at = run_row["ended_at"]
+    state = STATE_COMPLETED if is_forced else run_row["state"]
+
+    if is_forced and not ended_at:
+        max_obs_row = connection.execute(
+            "SELECT max(observed_at) AS latest_obs FROM shop_observation WHERE run_id = ?",
+            (target_run_id,),
+        ).fetchone()
+        ended_at = max_obs_row["latest_obs"] if max_obs_row and max_obs_row["latest_obs"] else run_row["started_at"]
+
+    run_payload = {
+        "runId": target_run_id,
+        "startedAt": run_row["started_at"],
+        "endedAt": ended_at,
+        "state": state,
+        "mapId": run_row["map_id"],
+        "channel": run_row["channel"],
+        "totalTargets": run_row["total_targets"],
+        "visitedTargets": run_row["visited_targets"],
+        "failedTargets": run_row["failed_targets"],
+        "publishable": publishable,
+    }
+
+    attributes: dict[int, list[dict]] = defaultdict(list)
+    for row in connection.execute(
+        "SELECT a.listing_id, a.slot_index, a.attr_type, a.attr_value "
+        "FROM shop_listing_attribute a "
+        "JOIN shop_listing l ON l.listing_id = a.listing_id "
+        "JOIN shop_observation o ON o.observation_id = l.observation_id "
+        "WHERE o.run_id = ? "
+        "ORDER BY a.listing_id, a.slot_index",
+        (target_run_id,),
+    ):
+        attributes[row["listing_id"]].append(
+            {
+                "slotIndex": row["slot_index"],
+                "attrType": row["attr_type"],
+                "attrValue": row["attr_value"],
+            }
+        )
+
+    sockets: dict[int, list[dict]] = defaultdict(list)
+    for row in connection.execute(
+        "SELECT s.listing_id, s.socket_index, s.socket_value "
+        "FROM shop_listing_socket s "
+        "JOIN shop_listing l ON l.listing_id = s.listing_id "
+        "JOIN shop_observation o ON o.observation_id = l.observation_id "
+        "WHERE o.run_id = ? "
+        "ORDER BY s.listing_id, s.socket_index",
+        (target_run_id,),
+    ):
+        sockets[row["listing_id"]].append(
+            {
+                "socketIndex": row["socket_index"],
+                "socketValue": row["socket_value"],
+            }
+        )
+
+    listings: dict[str, list[dict]] = defaultdict(list)
+    for row in connection.execute(
+        "SELECT l.* "
+        "FROM shop_listing l "
+        "JOIN shop_observation o ON o.observation_id = l.observation_id "
+        "WHERE o.run_id = ? "
+        "ORDER BY l.observation_id, l.slot_index, l.listing_id",
+        (target_run_id,),
+    ):
+        listing_id = row["listing_id"]
+        listings[row["observation_id"]].append(
+            {
+                "listingId": listing_id,
+                "slotIndex": row["slot_index"],
+                "vnum": row["vnum"],
+                "itemName": row["item_name"],
+                "count": row["count"],
+                "priceRaw": row["price_raw"],
+                "unitPrice": row["unit_price"],
+                "tailField": row["tail_field"],
+                "attributes": attributes[listing_id],
+                "sockets": sockets[listing_id],
+            }
+        )
+
+    observations = []
+    for row in connection.execute(
+        "SELECT * FROM shop_observation WHERE run_id = ? ORDER BY observed_at, observation_id",
+        (target_run_id,),
+    ):
+        obs_id = row["observation_id"]
+        observation_listings = listings[obs_id]
+        if row["item_count"] != len(observation_listings):
+            raise RuntimeError(
+                f"Observation {obs_id} reports {row['item_count']} items "
+                f"but SQLite contains {len(observation_listings)} listings"
+            )
+        observations.append(
+            {
+                "observationId": obs_id,
+                "runId": target_run_id,
+                "shopVid": row["shop_vid"],
+                "shopTitle": row["shop_title"],
+                "ownerName": row["owner_name"],
+                "mapId": row["map_id"],
+                "channel": row["channel"],
+                "x": row["x"],
+                "y": row["y"],
+                "z": row["z"],
+                "observedAt": row["observed_at"],
+                "contentFingerprint": row["content_fingerprint"],
+                "itemCount": row["item_count"],
+                "listings": observation_listings,
+            }
+        )
+
+    counts = {
+        "observations": len(observations),
+        "listings": sum(len(value) for value in listings.values()),
+        "attributes": sum(len(value) for value in attributes.values()),
+        "sockets": sum(len(value) for value in sockets.values()),
+    }
+    return run_payload, observations, counts, is_forced
+
+
 def read_run_data(
     path: Path, run_id: str | None, latest_completed: bool, publishable: bool, force_completed: bool
-) -> tuple[dict, list[dict], dict[str, int], bool]:
+) -> tuple[dict, list[dict], dict[str, int], bool, int]:
     if not path.is_file():
         raise RuntimeError(f"SQLite database does not exist: {path}")
 
@@ -104,136 +251,23 @@ def read_run_data(
     connection = sqlite3.connect(database_uri, uri=True)
     connection.row_factory = sqlite3.Row
     try:
-        run_row, is_forced = select_target_run(connection, run_id, latest_completed, force_completed)
-        target_run_id = run_row["run_id"]
-
-        ended_at = run_row["ended_at"]
-        state = STATE_COMPLETED if is_forced else run_row["state"]
-
-        if is_forced and not ended_at:
-            max_obs_row = connection.execute(
-                "SELECT max(observed_at) AS latest_obs FROM shop_observation WHERE run_id = ?",
-                (target_run_id,),
-            ).fetchone()
-            ended_at = max_obs_row["latest_obs"] if max_obs_row and max_obs_row["latest_obs"] else run_row["started_at"]
-
-        run_payload = {
-            "runId": target_run_id,
-            "startedAt": run_row["started_at"],
-            "endedAt": ended_at,
-            "state": state,
-            "mapId": run_row["map_id"],
-            "channel": run_row["channel"],
-            "totalTargets": run_row["total_targets"],
-            "visitedTargets": run_row["visited_targets"],
-            "failedTargets": run_row["failed_targets"],
-            "publishable": publishable,
-        }
-
-        attributes: dict[int, list[dict]] = defaultdict(list)
-        for row in connection.execute(
-            "SELECT a.listing_id, a.slot_index, a.attr_type, a.attr_value "
-            "FROM shop_listing_attribute a "
-            "JOIN shop_listing l ON l.listing_id = a.listing_id "
-            "JOIN shop_observation o ON o.observation_id = l.observation_id "
-            "WHERE o.run_id = ? "
-            "ORDER BY a.listing_id, a.slot_index",
-            (target_run_id,),
-        ):
-            attributes[row["listing_id"]].append(
-                {
-                    "slotIndex": row["slot_index"],
-                    "attrType": row["attr_type"],
-                    "attrValue": row["attr_value"],
-                }
-            )
-
-        sockets: dict[int, list[dict]] = defaultdict(list)
-        for row in connection.execute(
-            "SELECT s.listing_id, s.socket_index, s.socket_value "
-            "FROM shop_listing_socket s "
-            "JOIN shop_listing l ON l.listing_id = s.listing_id "
-            "JOIN shop_observation o ON o.observation_id = l.observation_id "
-            "WHERE o.run_id = ? "
-            "ORDER BY s.listing_id, s.socket_index",
-            (target_run_id,),
-        ):
-            sockets[row["listing_id"]].append(
-                {
-                    "socketIndex": row["socket_index"],
-                    "socketValue": row["socket_value"],
-                }
-            )
-
-        listings: dict[str, list[dict]] = defaultdict(list)
-        for row in connection.execute(
-            "SELECT l.* "
-            "FROM shop_listing l "
-            "JOIN shop_observation o ON o.observation_id = l.observation_id "
-            "WHERE o.run_id = ? "
-            "ORDER BY l.observation_id, l.slot_index, l.listing_id",
-            (target_run_id,),
-        ):
-            listing_id = row["listing_id"]
-            listings[row["observation_id"]].append(
-                {
-                    "listingId": listing_id,
-                    "slotIndex": row["slot_index"],
-                    "vnum": row["vnum"],
-                    "itemName": row["item_name"],
-                    "count": row["count"],
-                    "priceRaw": row["price_raw"],
-                    "unitPrice": row["unit_price"],
-                    "tailField": row["tail_field"],
-                    "attributes": attributes[listing_id],
-                    "sockets": sockets[listing_id],
-                }
-            )
-
-        observations = []
-        for row in connection.execute(
-            "SELECT * FROM shop_observation WHERE run_id = ? ORDER BY observed_at, observation_id",
-            (target_run_id,),
-        ):
-            obs_id = row["observation_id"]
-            observation_listings = listings[obs_id]
-            if row["item_count"] != len(observation_listings):
-                raise RuntimeError(
-                    f"Observation {obs_id} reports {row['item_count']} items "
-                    f"but SQLite contains {len(observation_listings)} listings"
-                )
-            observations.append(
-                {
-                    "observationId": obs_id,
-                    "runId": target_run_id,
-                    "shopVid": row["shop_vid"],
-                    "shopTitle": row["shop_title"],
-                    "ownerName": row["owner_name"],
-                    "mapId": row["map_id"],
-                    "channel": row["channel"],
-                    "x": row["x"],
-                    "y": row["y"],
-                    "z": row["z"],
-                    "observedAt": row["observed_at"],
-                    "contentFingerprint": row["content_fingerprint"],
-                    "itemCount": row["item_count"],
-                    "listings": observation_listings,
-                }
-            )
-
-        counts = {
-            "observations": len(observations),
-            "listings": sum(len(value) for value in listings.values()),
-            "attributes": sum(len(value) for value in attributes.values()),
-            "sockets": sum(len(value) for value in sockets.values()),
-        }
+        run_row = select_target_run(connection, run_id, latest_completed, force_completed)
+        run_payload, observations, counts, is_forced = load_run_payload_and_observations(
+            connection, run_row, publishable, force_completed
+        )
         return run_payload, observations, counts, is_forced, run_row["state"]
     finally:
         connection.close()
 
 
-def post_batch(api_url: str, token: str, payload: dict) -> dict:
-    endpoint = api_url.rstrip("/") + "/internal/v1/imports"
+def post_batch(api_url: str, token: str, payload: dict, server: str = "pandora") -> dict:
+    if server not in SERVERS:
+        raise ValueError(f"Unsupported game server: {server}")
+    if server == "pandora":
+        endpoint_path = "/internal/v1/imports"
+    else:
+        endpoint_path = f"/internal/v1/servers/{server}/imports"
+    endpoint = api_url.rstrip("/") + endpoint_path
     body = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
     request = Request(
         endpoint,
@@ -259,19 +293,36 @@ def main() -> int:
         print("ERROR: --batch-size must be greater than zero", file=sys.stderr)
         return 2
 
+    if args.server == "pandora":
+        database = args.database or DEFAULT_DATABASE
+        source_id = args.source_id or DEFAULT_SOURCE_ID
+    else:
+        if args.database is None or not args.source_id:
+            print("ERROR: --database and --source-id are required for Elder and Beavium.", file=sys.stderr)
+            return 2
+        database = args.database
+        source_id = args.source_id
+    token = args.token or os.environ.get(TOKEN_ENVIRONMENT[args.server])
+    if not token and args.server == "pandora":
+        token = "local-dev-token"
+    if not token and not args.dry_run:
+        print(f"ERROR: set {TOKEN_ENVIRONMENT[args.server]} or pass --token.", file=sys.stderr)
+        return 2
+
     if args.force_completed and not args.run_id:
         print("ERROR: --force-completed requires explicit --run-id <id>", file=sys.stderr)
         return 2
 
     try:
         run_payload, observations, counts, is_forced, orig_state = read_run_data(
-            args.database, args.run_id, args.latest_completed, args.publishable, args.force_completed
+            database, args.run_id, args.latest_completed, args.publishable, args.force_completed
         )
 
         batch_count = max(1, (len(observations) + args.batch_size - 1) // args.batch_size)
         run_id = run_payload["runId"]
 
         print("=== Selected Scanner Run Summary ===")
+        print(f"Game server:       {args.server}")
         print(f"Run ID:            {run_id}")
         print(f"Started at:        {run_payload['startedAt']}")
         print(f"Ended at:          {run_payload['endedAt']}")
@@ -303,12 +354,12 @@ def main() -> int:
             batch_observations = observations[start : start + args.batch_size]
             batch_id = f"sqlite-{run_id}-{index + 1:04d}"
             payload = {
-                "sourceId": args.source_id,
+                "sourceId": source_id,
                 "batchId": batch_id,
                 "runs": [run_payload] if index == 0 else [],
                 "observations": batch_observations,
             }
-            result = post_batch(args.api_url, args.token, payload)
+            result = post_batch(args.api_url, token, payload, args.server)
             accepted["runs"] += result["importedRuns"]
             accepted["observations"] += result["importedObservations"]
             accepted["listings"] += result["importedListings"]

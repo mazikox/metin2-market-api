@@ -4,8 +4,11 @@ import tools.jackson.core.type.TypeReference;
 import tools.jackson.databind.ObjectMapper;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Service;
+import com.mazikox.metin_market_api.server.GameServer;
+import com.mazikox.metin_market_api.server.ServerContext;
 
 import java.sql.SQLException;
+import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.util.List;
 
@@ -20,6 +23,7 @@ public class ItemSearchService {
     }
 
     public SearchPage search(String query, List<Integer> vnums, int page, int size) {
+        GameServer gameServer = ServerContext.requireCurrent();
         String filter = vnums.isEmpty()
                 ? "lower(l.item_name) LIKE lower(:query)"
                 : "l.item_vnum IN (:vnums) AND lower(l.item_name) LIKE lower(:query)";
@@ -74,13 +78,14 @@ public class ItemSearchService {
         long total = countSpec.query(Long.class).single();
         List<ItemSearchResult> items = dataSpec.query((rs, rowNum) -> {
             try {
+                OffsetDateTime observedAt = rs.getObject("observed_at", OffsetDateTime.class);
                 return new ItemSearchResult(rs.getLong("listing_id"), rs.getInt("item_vnum"), rs.getString("item_name"),
                         rs.getInt("quantity"), rs.getLong("price_raw"), rs.getLong("unit_price"),
                         rs.getLong("total_quantity"), rs.getLong("total_price"), rs.getInt("listing_count"),
                         objectMapper.<List<RawItemAttribute>>readValue(rs.getString("attributes"), new TypeReference<>() {})
                                 .stream().map(attribute -> {
                                     ItemBonusCatalog.Details details = ItemBonusCatalog.describe(
-                                            attribute.type(), attribute.value());
+                                            gameServer, attribute.type(), attribute.value());
                                     return new ItemSearchResult.ItemAttribute(attribute.slotIndex(), attribute.type(),
                                             details.code(), details.name(), attribute.value(), details.displayValue());
                                 }).toList(),
@@ -88,7 +93,7 @@ public class ItemSearchService {
                         new ItemSearchResult.Shop((Long) rs.getObject("shop_vid"), rs.getString("shop_title"),
                                 rs.getString("owner_name"), rs.getString("map_id"), (Integer) rs.getObject("channel"),
                                 rs.getDouble("x"), rs.getDouble("y"), rs.getDouble("z")),
-                        rs.getObject("observed_at", OffsetDateTime.class));
+                        observedAt != null ? observedAt.toLocalDate() : null);
             } catch (Exception e) {
                 throw new SQLException("Cannot decode listing details", e);
             }

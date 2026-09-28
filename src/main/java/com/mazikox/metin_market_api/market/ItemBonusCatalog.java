@@ -1,5 +1,7 @@
 package com.mazikox.metin_market_api.market;
 
+import com.mazikox.metin_market_api.server.GameServer;
+
 import java.util.Map;
 
 /**
@@ -75,6 +77,13 @@ public final class ItemBonusCatalog {
             return new Details("UNKNOWN", "Nieznany bonus", signed(value));
         }
         return new Details(metadata.code(), metadata.name(), metadata.format().display(value));
+    }
+
+    public static Details describe(GameServer server, int type, int value) {
+        if (server == GameServer.PANDORA) {
+            return describe(type, value);
+        }
+        return new Details("UNKNOWN", "Nieznany bonus", signed(value));
     }
 
     private static Map.Entry<Integer, Metadata> entry(int type, String code, String name, Format format) {

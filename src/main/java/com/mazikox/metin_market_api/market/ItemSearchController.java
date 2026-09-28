@@ -13,7 +13,7 @@ import java.util.List;
 
 @Validated
 @RestController
-@RequestMapping("/api/v1/items")
+@RequestMapping({"/api/v1/items", "/api/v1/servers/{server}/items"})
 public class ItemSearchController {
     public static final int MAX_VNUMS = 100;
     private final ItemSearchService service;

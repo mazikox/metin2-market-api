@@ -1,6 +1,7 @@
 package com.mazikox.metin_market_api.ingestion;
 
 import com.mazikox.metin_market_api.ApiExceptionHandler;
+import com.mazikox.metin_market_api.server.ServerRoutingFilter;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -21,6 +22,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 class ImportControllerTest {
 
     private static final String VALID_TOKEN = "secret-scanner-token-123";
+    private static final String ELDER_TOKEN = "elder-scanner-token-456";
+    private static final String BEAVIUM_TOKEN = "beavium-scanner-token-789";
 
     private MockMvc mockMvc;
 
@@ -29,9 +32,10 @@ class ImportControllerTest {
 
     @BeforeEach
     void setUp() {
-        ImportController controller = new ImportController(importService, VALID_TOKEN);
+        ImportController controller = new ImportController(importService, VALID_TOKEN, ELDER_TOKEN, BEAVIUM_TOKEN);
         this.mockMvc = MockMvcBuilders.standaloneSetup(controller)
                 .setControllerAdvice(new ApiExceptionHandler())
+                .addFilters(new ServerRoutingFilter())
                 .build();
     }
 

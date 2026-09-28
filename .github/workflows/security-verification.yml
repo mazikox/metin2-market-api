@@ -46,5 +46,7 @@ jobs:
         env:
           POSTGRES_PASSWORD: test_postgres_password_123
           SCANNER_TOKEN: test_scanner_token_456
+          SCANNER_TOKEN_ELDER: test_scanner_token_elder_789
+          SCANNER_TOKEN_BEAVIUM: test_scanner_token_beavium_012
         run: |
           docker compose config

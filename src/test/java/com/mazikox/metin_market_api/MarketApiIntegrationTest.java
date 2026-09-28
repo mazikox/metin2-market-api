@@ -1,5 +1,7 @@
 package com.mazikox.metin_market_api;
 
+import com.mazikox.metin_market_api.server.GameServer;
+import com.mazikox.metin_market_api.server.ServerContext;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -31,7 +33,9 @@ class MarketApiIntegrationTest {
         registry.add("spring.datasource.url", postgres::getJdbcUrl);
         registry.add("spring.datasource.username", postgres::getUsername);
         registry.add("spring.datasource.password", postgres::getPassword);
-        registry.add("app.scanner-token", () -> "test-token");
+        registry.add("app.scanner-token.pandora", () -> "test-token");
+        registry.add("app.scanner-token.elder", () -> "elder-test-token");
+        registry.add("app.scanner-token.beavium", () -> "beavium-test-token");
     }
 
     @Autowired ObjectMapper objectMapper;
@@ -40,7 +44,17 @@ class MarketApiIntegrationTest {
 
     @BeforeEach
     void cleanDatabase() {
-        jdbc.sql("TRUNCATE shop_listing_socket, shop_listing_attribute, shop_listing, shop_observation, scan_run, synchronization_batch CASCADE").update();
+        ServerContext.withServer(GameServer.PANDORA, () -> jdbc.sql("""
+                TRUNCATE pandora.shop_listing_socket, pandora.shop_listing_attribute,
+                         pandora.shop_listing, pandora.shop_observation, pandora.scan_run,
+                         pandora.synchronization_batch,
+                         elder.shop_listing_socket, elder.shop_listing_attribute,
+                         elder.shop_listing, elder.shop_observation, elder.scan_run,
+                         elder.synchronization_batch,
+                         beavium.shop_listing_socket, beavium.shop_listing_attribute,
+                         beavium.shop_listing, beavium.shop_observation, beavium.scan_run,
+                         beavium.synchronization_batch CASCADE
+                """).update());
     }
 
     @Test
@@ -68,8 +82,48 @@ class MarketApiIntegrationTest {
         assertThat(item.path("sockets")).hasSize(6);
         assertThat(item.path("shop").path("vid").asLong()).isEqualTo(47844);
         assertThat(item.path("shop").path("mapId").asText()).isEqualTo("metin2_map_a1_summer");
-        assertThat(item.path("observedAt").asText()).startsWith("2026-09-12T09:34:18.155");
+        assertThat(item.path("observedAt").asText()).isEqualTo("2026-09-12");
         assertThat(searchBody.path("totalElements").asLong()).isEqualTo(1);
+    }
+
+    @Test
+    void serverRoutesKeepPandoraOutputAndIsolateAllThreeServers() throws Exception {
+        String body = new ClassPathResource("import-example.json").getContentAsString(StandardCharsets.UTF_8);
+        HttpClient http = HttpClient.newHttpClient();
+
+        HttpResponse<String> pandoraImport = postImport(http, "/internal/v1/imports", "test-token", body);
+        assertThat(pandoraImport.statusCode()).isEqualTo(200);
+        JsonNode legacyPandora = getJson(http, "/api/v1/items?query=Zatruty");
+        JsonNode routedPandora = getJson(http, "/api/v1/servers/pandora/items?query=Zatruty");
+        assertThat(routedPandora).isEqualTo(legacyPandora);
+        assertThat(legacyPandora.path("totalElements").asInt()).isEqualTo(1);
+
+        JsonNode emptyElder = getJson(http, "/api/v1/servers/elder/items?query=Zatruty");
+        assertThat(emptyElder.path("totalElements").asInt()).isZero();
+
+        HttpResponse<String> wrongElderToken = postImport(
+                http, "/internal/v1/servers/elder/imports", "test-token", body);
+        assertThat(wrongElderToken.statusCode()).isEqualTo(401);
+        HttpResponse<String> elderImport = postImport(
+                http, "/internal/v1/servers/elder/imports", "elder-test-token", body);
+        assertThat(elderImport.statusCode()).isEqualTo(200);
+
+        HttpResponse<String> beaviumImport = postImport(
+                http, "/internal/v1/servers/beavium/imports", "beavium-test-token", body);
+        assertThat(beaviumImport.statusCode()).isEqualTo(200);
+
+        JsonNode elderSearch = getJson(http, "/api/v1/servers/elder/items?query=Zatruty");
+        JsonNode beaviumSearch = getJson(http, "/api/v1/servers/beavium/items?query=Zatruty");
+        assertThat(elderSearch.path("totalElements").asInt()).isEqualTo(1);
+        assertThat(beaviumSearch.path("totalElements").asInt()).isEqualTo(1);
+        assertThat(elderSearch.path("items").get(0).path("attributes").get(0).path("code").asText())
+                .isEqualTo("UNKNOWN");
+        assertThat(getJson(http, "/api/v1/items?query=Zatruty")).isEqualTo(legacyPandora);
+
+        HttpResponse<String> unknownServer = http.send(HttpRequest.newBuilder(URI.create(
+                "http://localhost:" + port + "/api/v1/servers/unknown/items?query=Zatruty")).GET().build(),
+                HttpResponse.BodyHandlers.ofString());
+        assertThat(unknownServer.statusCode()).isEqualTo(404);
     }
 
     @Test
@@ -448,6 +502,14 @@ class MarketApiIntegrationTest {
         HttpResponse<String> response = http.send(request, HttpResponse.BodyHandlers.ofString());
         assertThat(response.statusCode()).isEqualTo(200);
         return objectMapper.readTree(response.body());
+    }
+
+    private HttpResponse<String> postImport(HttpClient http, String path, String token, String payload)
+            throws Exception {
+        HttpRequest request = HttpRequest.newBuilder(URI.create("http://localhost:" + port + path))
+                .header("X-Scanner-Token", token).header("Content-Type", "application/json")
+                .POST(HttpRequest.BodyPublishers.ofString(payload)).build();
+        return http.send(request, HttpResponse.BodyHandlers.ofString());
     }
 
     private JsonNode getJson(HttpClient http, String path) throws Exception {

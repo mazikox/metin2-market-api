@@ -59,8 +59,27 @@ jobs:
           ssh "$VPS_USER@$VPS_HOST" '
             set -e
             cd ~/metin2-market-api
+            dirty_checkout="$(git status --porcelain)"
+            if [ -n "$dirty_checkout" ]; then
+              echo "Production checkout has local files:"
+              git status --short
+              git diff --stat
+              if [ "$dirty_checkout" = "?? curl" ] && [ -f curl ] && [ ! -L curl ]; then
+                preserve_root="$HOME/metin-market-api-checkout-backups"
+                mkdir -p "$preserve_root"
+                chmod 700 "$preserve_root"
+                preserve_dir="$(mktemp -d "$preserve_root/curl-$(date -u +%Y%m%dT%H%M%SZ)-XXXXXX")"
+                chmod 700 "$preserve_dir"
+                stat -c "Preserving curl: type=%F size=%s mode=%a" -- curl
+                mv -- curl "$preserve_dir/curl"
+                echo "Preserved untracked file outside the checkout: $preserve_dir/curl"
+              else
+                echo "Refusing to overwrite unexpected local production files"
+                exit 1
+              fi
+            fi
             if [ -n "$(git status --porcelain)" ]; then
-              echo "Refusing to overwrite a dirty production checkout; diagnostic summary:"
+              echo "Refusing to deploy; local files remain in the checkout"
               git status --short
               git diff --stat
               exit 1

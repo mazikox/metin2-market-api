@@ -6,8 +6,8 @@ on:
       - main
   workflow_dispatch:
     inputs:
-      pandora_schema_migrated:
-        description: Confirm that ops/migrate-public-to-pandora.sql ran and was verified on the production database
+      confirm_multiserver_migration:
+        description: Back up production, migrate Pandora, deploy the multiserver API, and verify routes
         required: true
         type: boolean
         default: false
@@ -35,7 +35,7 @@ jobs:
         run: bash mvnw test
 
   deploy:
-    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.pandora_schema_migrated
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.confirm_multiserver_migration
     needs: test
     runs-on: ubuntu-latest
 
@@ -59,9 +59,13 @@ jobs:
           ssh "$VPS_USER@$VPS_HOST" '
             set -e
             cd ~/metin2-market-api
+            if [ -n "$(git status --porcelain)" ]; then
+              echo "Refusing to overwrite a dirty production checkout"
+              exit 1
+            fi
             git fetch origin main
             git reset --hard origin/main
-            sudo docker compose up -d --build
+            bash ops/deploy-multiserver.sh
           '
 
       - name: Health check
@@ -70,11 +74,27 @@ jobs:
             if curl --fail --silent --show-error \
               "https://api.mazikox.pl/api/v1/items?page=0&size=1" > /dev/null \
               && curl --fail --silent --show-error \
+              "https://api.mazikox.pl/api/v1/items/suggestions?query=Miecz" > /dev/null \
+              && curl --fail --silent --show-error \
+              "https://api.mazikox.pl/api/v1/items/statistics?vnum=180" > /dev/null \
+              && curl --fail --silent --show-error \
               "https://api.mazikox.pl/api/v1/servers/pandora/items?page=0&size=1" > /dev/null \
+              && curl --fail --silent --show-error \
+              "https://api.mazikox.pl/api/v1/servers/pandora/items/suggestions?query=Miecz" > /dev/null \
+              && curl --fail --silent --show-error \
+              "https://api.mazikox.pl/api/v1/servers/pandora/items/statistics?vnum=180" > /dev/null \
               && curl --fail --silent --show-error \
               "https://api.mazikox.pl/api/v1/servers/elder/items?page=0&size=1" > /dev/null \
               && curl --fail --silent --show-error \
-              "https://api.mazikox.pl/api/v1/servers/beavium/items?page=0&size=1" > /dev/null; then
+              "https://api.mazikox.pl/api/v1/servers/elder/items/suggestions?query=Miecz" > /dev/null \
+              && curl --fail --silent --show-error \
+              "https://api.mazikox.pl/api/v1/servers/elder/items/statistics?vnum=180" > /dev/null \
+              && curl --fail --silent --show-error \
+              "https://api.mazikox.pl/api/v1/servers/beavium/items?page=0&size=1" > /dev/null \
+              && curl --fail --silent --show-error \
+              "https://api.mazikox.pl/api/v1/servers/beavium/items/suggestions?query=Miecz" > /dev/null \
+              && curl --fail --silent --show-error \
+              "https://api.mazikox.pl/api/v1/servers/beavium/items/statistics?vnum=180" > /dev/null; then
               echo "API healthy"
               exit 0
             fi

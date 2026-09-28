@@ -88,7 +88,7 @@ $env:SCANNER_TOKEN_ELDER = "replace-with-a-private-token"
 python update_market.py --server elder --database "C:\path\to\elder-history.db" --source-id "eldersuite-elder-main" --dry-run
 ```
 
-The production schema move is a controlled operation. First rehearse it on a restored database copy; then use `ops/migrate-public-to-pandora.sql` during a maintenance window with the API stopped. The rollback script is `ops/rollback-pandora-to-public.sql`. Read [docs/multi-server-migration-plan.md](docs/multi-server-migration-plan.md) before running either script. The deploy workflow runs tests automatically but only deploys when manually dispatched on `main`, so the database move can happen before the new API version starts.
+The production schema move is a controlled operation. Rehearse it on a restored database copy first. The manual `Deploy backend` workflow on `main`, with `confirm_multiserver_migration` enabled, checks the VPS Compose setup, verifies a database backup, migrates Pandora, deploys the API, and checks all server routes. It retains the backup under `~/metin-market-db-backups` and attempts to restore the previous schema and API image if startup checks fail. The workflow requires all three scanner tokens in the VPS `.env`. See [docs/multi-server-migration-plan.md](docs/multi-server-migration-plan.md).
 
 ## Source identity model
 

@@ -6,6 +6,8 @@ cd "$HOME/metin2-market-api"
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
 backup_dir="$HOME/metin-market-db-backups"
 backup_file="$backup_dir/metin_market_before_multiserver_${timestamp}.dump"
+env_file="$HOME/metin2-market-api/.env"
+env_backup_file="$backup_dir/metin_market_env_before_multiserver_${timestamp}.env"
 rollback_tag="local/metin-market-api-before-multiserver:${timestamp}"
 old_image_ref=""
 migration_completed=0
@@ -31,6 +33,30 @@ rollback_on_error() {
   exit "$status"
 }
 trap 'rollback_on_error $?' ERR
+
+echo "Checking the production environment file and scanner credentials."
+if [ ! -f "$env_file" ] || [ -L "$env_file" ]; then
+  echo "Expected a regular .env file at $env_file." >&2
+  exit 1
+fi
+mkdir -p "$backup_dir"
+chmod 700 "$backup_dir"
+umask 077
+cp "$env_file" "$env_backup_file"
+chmod 600 "$env_backup_file"
+
+ensure_scanner_token() {
+  local key="$1"
+  if ! grep -qE "^${key}=[^[:space:]]+$" "$env_file"; then
+    sed -i "/^${key}=/d" "$env_file"
+    printf '%s=%s\n' "$key" "$(openssl rand -hex 32)" >> "$env_file"
+    echo "Generated a missing private credential: $key"
+  fi
+}
+
+ensure_scanner_token SCANNER_TOKEN_ELDER
+ensure_scanner_token SCANNER_TOKEN_BEAVIUM
+chmod 600 "$env_file"
 
 echo "Checking Compose configuration and running services."
 sudo docker compose config --quiet

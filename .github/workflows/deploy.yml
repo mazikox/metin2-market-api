@@ -60,7 +60,9 @@ jobs:
             set -e
             cd ~/metin2-market-api
             if [ -n "$(git status --porcelain)" ]; then
-              echo "Refusing to overwrite a dirty production checkout"
+              echo "Refusing to overwrite a dirty production checkout; diagnostic summary:"
+              git status --short
+              git diff --stat
               exit 1
             fi
             git fetch origin main

@@ -210,6 +210,12 @@ class MarketApiIntegrationTest {
         JsonNode barePlusSuggestions = getJson(http, "/api/v1/items/suggestions?query=Przedmiot%20z%20plusem");
         assertThat(barePlusSuggestions.path("suggestions").toString()).doesNotContain("UPGRADE_FAMILY");
 
+        JsonNode unaccentSuggestions = getJson(http, "/api/v1/items/suggestions?query=miecz%20TESTOWY");
+        assertThat(unaccentSuggestions.path("totalMatches").asLong()).isEqualTo(2);
+
+        JsonNode unaccentSearch = getJson(http, "/api/v1/items?query=miecz%20testowy");
+        assertThat(unaccentSearch.path("totalElements").asLong()).isEqualTo(4);
+
         HttpResponse<String> cors = http.send(HttpRequest.newBuilder(URI.create("http://localhost:" + port
                 + "/api/v1/items/suggestions?query=Miecz")).header("Origin", "https://mazikox.pl").GET().build(),
                 HttpResponse.BodyHandlers.ofString());

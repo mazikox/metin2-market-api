@@ -25,8 +25,8 @@ public class ItemSearchService {
     public SearchPage search(String query, List<Integer> vnums, int page, int size) {
         GameServer gameServer = ServerContext.requireCurrent();
         String filter = vnums.isEmpty()
-                ? "lower(l.item_name) LIKE lower(:query)"
-                : "l.item_vnum IN (:vnums) AND lower(l.item_name) LIKE lower(:query)";
+                ? "public.unaccent(lower(l.item_name)) LIKE public.unaccent(lower(:query))"
+                : "l.item_vnum IN (:vnums) AND public.unaccent(lower(l.item_name)) LIKE public.unaccent(lower(:query))";
         String baseCte = """
                 WITH latest_run AS (
                     SELECT id FROM scan_run

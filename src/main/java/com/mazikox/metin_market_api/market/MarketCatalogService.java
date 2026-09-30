@@ -24,8 +24,8 @@ public class MarketCatalogService {
 
     public ItemSuggestionsResponse suggestions(String query, Integer vnum) {
         String filter = vnum == null
-                ? "lower(c.item_name) LIKE lower(:query)"
-                : "c.item_vnum = :vnum AND lower(c.item_name) LIKE lower(:query)";
+                ? "public.unaccent(lower(c.item_name)) LIKE public.unaccent(lower(:query))"
+                : "c.item_vnum = :vnum AND public.unaccent(lower(c.item_name)) LIKE public.unaccent(lower(:query))";
         String catalog = "WITH catalog AS (SELECT DISTINCT item_vnum, item_name FROM shop_listing) ";
         var count = jdbc.sql(catalog + "SELECT count(*) FROM catalog c WHERE " + filter)
                 .param("query", "%" + query + "%");

@@ -1,4 +1,6 @@
-package com.mazikox.metin_market_api.market;
+package com.mazikox.metin_market_api.market.api;
+
+import com.mazikox.metin_market_api.market.domain.ItemSuggestion;
 
 import java.util.List;
 

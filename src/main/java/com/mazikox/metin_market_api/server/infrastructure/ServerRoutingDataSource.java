@@ -1,4 +1,4 @@
-package com.mazikox.metin_market_api.server;
+package com.mazikox.metin_market_api.server.infrastructure;
 
 import org.springframework.jdbc.datasource.lookup.AbstractRoutingDataSource;
 

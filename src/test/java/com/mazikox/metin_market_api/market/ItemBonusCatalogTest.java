@@ -1,5 +1,6 @@
 package com.mazikox.metin_market_api.market;
 
+import com.mazikox.metin_market_api.market.domain.ItemBonusCatalog;
 import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;

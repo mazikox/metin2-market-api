@@ -1,4 +1,4 @@
-package com.mazikox.metin_market_api.market;
+package com.mazikox.metin_market_api.market.api;
 
 import java.time.LocalDate;
 import java.util.List;

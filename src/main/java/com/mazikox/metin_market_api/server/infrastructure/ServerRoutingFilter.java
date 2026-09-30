@@ -1,5 +1,6 @@
-package com.mazikox.metin_market_api.server;
+package com.mazikox.metin_market_api.server.infrastructure;
 
+import com.mazikox.metin_market_api.server.domain.GameServer;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;

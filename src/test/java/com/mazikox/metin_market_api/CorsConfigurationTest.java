@@ -1,5 +1,6 @@
 package com.mazikox.metin_market_api;
 
+import com.mazikox.metin_market_api.shared.web.CorsConfiguration;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.context.annotation.Bean;

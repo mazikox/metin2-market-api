@@ -1,4 +1,4 @@
-package com.mazikox.metin_market_api.server;
+package com.mazikox.metin_market_api.server.domain;
 
 import java.util.Arrays;
 import java.util.Optional;

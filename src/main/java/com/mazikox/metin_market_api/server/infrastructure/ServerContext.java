@@ -1,4 +1,6 @@
-package com.mazikox.metin_market_api.server;
+package com.mazikox.metin_market_api.server.infrastructure;
+
+import com.mazikox.metin_market_api.server.domain.GameServer;
 
 import java.util.function.Supplier;
 

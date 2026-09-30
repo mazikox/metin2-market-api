@@ -1,4 +1,4 @@
-package com.mazikox.metin_market_api;
+package com.mazikox.metin_market_api.shared.web;
 
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Configuration;

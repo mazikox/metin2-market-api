@@ -1,4 +1,4 @@
-package com.mazikox.metin_market_api.market;
+package com.mazikox.metin_market_api.market.domain;
 
 import java.math.BigDecimal;
 

@@ -1,4 +1,4 @@
-package com.mazikox.metin_market_api.ingestion;
+package com.mazikox.metin_market_api.ingestion.api;
 
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;

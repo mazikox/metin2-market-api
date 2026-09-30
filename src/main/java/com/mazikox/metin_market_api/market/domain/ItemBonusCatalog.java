@@ -1,6 +1,6 @@
-package com.mazikox.metin_market_api.market;
+package com.mazikox.metin_market_api.market.domain;
 
-import com.mazikox.metin_market_api.server.GameServer;
+import com.mazikox.metin_market_api.server.domain.GameServer;
 
 import java.util.Map;
 

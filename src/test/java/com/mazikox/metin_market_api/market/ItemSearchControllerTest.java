@@ -1,11 +1,14 @@
 package com.mazikox.metin_market_api.market;
 
-import com.mazikox.metin_market_api.ApiExceptionHandler;
+import com.mazikox.metin_market_api.shared.web.ApiExceptionHandler;
+import com.mazikox.metin_market_api.market.api.ItemPriceStatisticsResponse;
+import com.mazikox.metin_market_api.market.api.ItemSearchController;
+import com.mazikox.metin_market_api.market.api.SearchPage;
+import com.mazikox.metin_market_api.market.application.GetItemStatistics;
+import com.mazikox.metin_market_api.market.application.GetItemSuggestions;
+import com.mazikox.metin_market_api.market.application.SearchItems;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.Mock;
-import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.test.web.servlet.MockMvc;
@@ -18,7 +21,6 @@ import java.util.List;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
-import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -29,8 +31,9 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 class ItemSearchControllerTest {
 
-    private static ItemSearchService itemSearchService = mock(ItemSearchService.class);
-    private static MarketCatalogService marketCatalogService = mock(MarketCatalogService.class);
+    private static SearchItems searchItems = mock(SearchItems.class);
+    private static GetItemSuggestions getItemSuggestions = mock(GetItemSuggestions.class);
+    private static GetItemStatistics getItemStatistics = mock(GetItemStatistics.class);
 
     private MockMvc mockMvc;
 
@@ -39,7 +42,7 @@ class ItemSearchControllerTest {
     static class TestConfig {
         @Bean
         public ItemSearchController itemSearchController() {
-            return new ItemSearchController(itemSearchService, marketCatalogService);
+            return new ItemSearchController(searchItems, getItemSuggestions, getItemStatistics);
         }
 
         @Bean
@@ -64,8 +67,8 @@ class ItemSearchControllerTest {
 
     @Test
     void searchWithMaxAllowedVnumsReturnsOk() throws Exception {
-        when(itemSearchService.search(anyString(), anyList(), anyInt(), anyInt()))
-                .thenReturn(new ItemSearchService.SearchPage(List.of(), 0, 20, 0));
+        when(searchItems.search(anyString(), anyList(), anyInt(), anyInt()))
+                .thenReturn(new SearchPage(List.of(), 0, 20, 0));
 
         String vnums = IntStream.rangeClosed(1, 100)
                 .mapToObj(i -> "vnum=" + i)
@@ -93,7 +96,7 @@ class ItemSearchControllerTest {
 
     @Test
     void statisticsWithMaxAllowedVnumsReturnsOk() throws Exception {
-        when(marketCatalogService.statistics(anyList()))
+        when(getItemStatistics.getStatistics(anyList()))
                 .thenReturn(new ItemPriceStatisticsResponse(List.of()));
 
         String vnums = IntStream.rangeClosed(1, 100)

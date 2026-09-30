@@ -1,7 +1,7 @@
 package com.mazikox.metin_market_api;
 
-import com.mazikox.metin_market_api.server.GameServer;
-import com.mazikox.metin_market_api.server.ServerContext;
+import com.mazikox.metin_market_api.server.domain.GameServer;
+import com.mazikox.metin_market_api.server.infrastructure.ServerContext;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;

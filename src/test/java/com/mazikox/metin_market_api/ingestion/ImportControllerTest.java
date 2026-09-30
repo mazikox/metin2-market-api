@@ -1,7 +1,11 @@
 package com.mazikox.metin_market_api.ingestion;
 
-import com.mazikox.metin_market_api.ApiExceptionHandler;
-import com.mazikox.metin_market_api.server.ServerRoutingFilter;
+import com.mazikox.metin_market_api.shared.web.ApiExceptionHandler;
+import com.mazikox.metin_market_api.ingestion.api.ImportController;
+import com.mazikox.metin_market_api.ingestion.api.ImportRequest;
+import com.mazikox.metin_market_api.ingestion.api.ImportResponse;
+import com.mazikox.metin_market_api.ingestion.application.ImportBatch;
+import com.mazikox.metin_market_api.server.infrastructure.ServerRoutingFilter;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -10,8 +14,6 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.setup.MockMvcBuilders;
-
-import java.util.List;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.when;
@@ -28,11 +30,11 @@ class ImportControllerTest {
     private MockMvc mockMvc;
 
     @Mock
-    private ImportService importService;
+    private ImportBatch importBatch;
 
     @BeforeEach
     void setUp() {
-        ImportController controller = new ImportController(importService, VALID_TOKEN, ELDER_TOKEN, BEAVIUM_TOKEN);
+        ImportController controller = new ImportController(importBatch, VALID_TOKEN, ELDER_TOKEN, BEAVIUM_TOKEN);
         this.mockMvc = MockMvcBuilders.standaloneSetup(controller)
                 .setControllerAdvice(new ApiExceptionHandler())
                 .addFilters(new ServerRoutingFilter())
@@ -72,7 +74,7 @@ class ImportControllerTest {
 
     @Test
     void importBatchWithValidTokenReturnsOk() throws Exception {
-        when(importService.importBatch(any(ImportRequest.class)))
+        when(importBatch.importBatch(any(ImportRequest.class)))
                 .thenReturn(new ImportResponse("test", "b1", false, 1, 1, 1));
 
         mockMvc.perform(post("/internal/v1/imports")

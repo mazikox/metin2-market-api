@@ -1,7 +1,8 @@
-package com.mazikox.metin_market_api.ingestion;
+package com.mazikox.metin_market_api.ingestion.api;
 
+import com.mazikox.metin_market_api.ingestion.application.ImportBatch;
+import com.mazikox.metin_market_api.server.infrastructure.ServerContext;
 import jakarta.validation.Valid;
-import com.mazikox.metin_market_api.server.ServerContext;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -18,17 +19,17 @@ import java.security.MessageDigest;
 @RestController
 @RequestMapping({"/internal/v1/imports", "/internal/v1/servers/{server}/imports"})
 public class ImportController {
-    private final ImportService service;
+    private final ImportBatch importBatch;
     private final byte[] pandoraToken;
     private final byte[] elderToken;
     private final byte[] beaviumToken;
 
     public ImportController(
-            ImportService service,
+            ImportBatch importBatch,
             @Value("${app.scanner-token.pandora}") String pandoraToken,
             @Value("${app.scanner-token.elder}") String elderToken,
             @Value("${app.scanner-token.beavium}") String beaviumToken) {
-        this.service = service;
+        this.importBatch = importBatch;
         this.pandoraToken = pandoraToken.getBytes(StandardCharsets.UTF_8);
         this.elderToken = elderToken.getBytes(StandardCharsets.UTF_8);
         this.beaviumToken = beaviumToken.getBytes(StandardCharsets.UTF_8);
@@ -54,6 +55,6 @@ public class ImportController {
         if (!MessageDigest.isEqual(expectedToken, supplied)) {
             throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "Invalid scanner token");
         }
-        return service.importBatch(request);
+        return importBatch.importBatch(request);
     }
 }

@@ -1,6 +1,6 @@
-package com.mazikox.metin_market_api;
+package com.mazikox.metin_market_api.shared.web;
 
-import com.mazikox.metin_market_api.ingestion.ImportConflictException;
+import com.mazikox.metin_market_api.ingestion.domain.ImportConflictException;
 import jakarta.validation.ConstraintViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ProblemDetail;

@@ -1,4 +1,4 @@
-package com.mazikox.metin_market_api.server;
+package com.mazikox.metin_market_api.server.infrastructure;
 
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.jdbc.autoconfigure.DataSourceProperties;

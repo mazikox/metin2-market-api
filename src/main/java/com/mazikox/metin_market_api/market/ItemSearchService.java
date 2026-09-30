@@ -33,7 +33,7 @@ public class ItemSearchService {
                     WHERE state = 3 AND publishable = true
                     ORDER BY ended_at DESC NULLS LAST, started_at DESC, id DESC
                     LIMIT 1
-                ), matching AS (
+                ), matching_listings AS (
                     SELECT l.id, l.observation_id, l.item_vnum, l.item_name, l.quantity,
                            l.price_raw, l.unit_price, l.tail_field,
                            o.shop_vid, o.shop_title, o.owner_name, o.map_id, o.channel,
@@ -42,37 +42,46 @@ public class ItemSearchService {
                     JOIN shop_observation o ON o.scan_run_id = r.id
                     JOIN shop_listing l ON l.observation_id = o.id
                     WHERE %s
+                ), attr_agg AS (
+                    SELECT a.listing_id, jsonb_agg(jsonb_build_object(
+                        'slotIndex', a.slot_index, 'type', a.attr_type, 'value', a.attr_value
+                    ) ORDER BY a.slot_index) AS attributes
+                    FROM shop_listing_attribute a
+                    WHERE a.listing_id IN (SELECT id FROM matching_listings)
+                    GROUP BY a.listing_id
+                ), sock_agg AS (
+                    SELECT s.listing_id, jsonb_agg(jsonb_build_object(
+                        'socketIndex', s.socket_index, 'value', s.socket_value
+                    ) ORDER BY s.socket_index) AS sockets
+                    FROM shop_listing_socket s
+                    WHERE s.listing_id IN (SELECT id FROM matching_listings)
+                    GROUP BY s.listing_id
+                ), matching AS (
+                    SELECT l.*,
+                           COALESCE(a.attributes, '[]'::jsonb) AS attributes,
+                           COALESCE(s.sockets, '[]'::jsonb) AS sockets
+                    FROM matching_listings l
+                    LEFT JOIN attr_agg a ON a.listing_id = l.id
+                    LEFT JOIN sock_agg s ON s.listing_id = l.id
                 ), aggregated AS (
                     SELECT min(id) AS listing_id, item_vnum, item_name, quantity, price_raw, unit_price,
                            tail_field, shop_vid, shop_title, owner_name, map_id, channel, x, y, z,
-                           observed_at,
+                           observed_at, attributes, sockets,
                            sum(quantity)::bigint AS total_quantity,
                            sum(price_raw)::bigint AS total_price,
                            count(*)::integer AS listing_count
                     FROM matching
                     GROUP BY observation_id, item_vnum, item_name, quantity, price_raw, unit_price,
                              tail_field, shop_vid, shop_title, owner_name, map_id, channel, x, y, z,
-                             observed_at
+                             observed_at, attributes, sockets
                 )
                 """.formatted(filter);
         var countSpec = jdbc.sql(baseCte + "SELECT count(*) FROM aggregated")
                 .param("query", "%" + query + "%");
         var dataSpec = jdbc.sql(baseCte + """
-                , page AS (
-                    SELECT * FROM aggregated
-                    ORDER BY unit_price ASC, observed_at DESC, listing_id DESC
-                    LIMIT :size OFFSET :offset
-                )
-                SELECT p.*,
-                       COALESCE((SELECT jsonb_agg(jsonb_build_object(
-                           'slotIndex', a.slot_index, 'type', a.attr_type, 'value', a.attr_value)
-                           ORDER BY a.slot_index)
-                           FROM shop_listing_attribute a WHERE a.listing_id = p.listing_id), '[]'::jsonb) AS attributes,
-                       COALESCE((SELECT jsonb_agg(jsonb_build_object(
-                           'socketIndex', s.socket_index, 'value', s.socket_value)
-                           ORDER BY s.socket_index)
-                           FROM shop_listing_socket s WHERE s.listing_id = p.listing_id), '[]'::jsonb) AS sockets
-                FROM page p
+                SELECT * FROM aggregated
+                ORDER BY unit_price ASC, observed_at DESC, listing_id DESC
+                LIMIT :size OFFSET :offset
                 """)
                 .param("query", "%" + query + "%").param("size", size).param("offset", (long) page * size);
         if (!vnums.isEmpty()) {

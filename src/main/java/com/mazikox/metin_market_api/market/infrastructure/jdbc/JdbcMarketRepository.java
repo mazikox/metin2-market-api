@@ -23,11 +23,19 @@ public class JdbcMarketRepository implements MarketRepository {
         this.objectMapper = objectMapper;
     }
 
+    private record RowWithTotal(MarketListingRecord record, long totalCount) {}
+
     @Override
     public MarketListingPage searchListings(String query, List<Integer> vnums, int page, int size) {
-        String filter = vnums.isEmpty()
-                ? "public.unaccent(lower(l.item_name)) LIKE public.unaccent(lower(:query))"
-                : "l.item_vnum IN (:vnums) AND public.unaccent(lower(l.item_name)) LIKE public.unaccent(lower(:query))";
+        boolean hasQuery = query != null && !query.isBlank();
+        String filter;
+        if (vnums.isEmpty()) {
+            filter = hasQuery ? "public.unaccent(lower(l.item_name)) LIKE public.unaccent(lower(:query))" : "TRUE";
+        } else {
+            filter = hasQuery
+                    ? "l.item_vnum IN (:vnums) AND public.unaccent(lower(l.item_name)) LIKE public.unaccent(lower(:query))"
+                    : "l.item_vnum IN (:vnums)";
+        }
         String baseCte = """
                 WITH latest_run AS (
                     SELECT id FROM scan_run
@@ -44,56 +52,71 @@ public class JdbcMarketRepository implements MarketRepository {
                     JOIN shop_listing l ON l.observation_id = o.id
                     WHERE %s
                 ), attr_agg AS (
-                    SELECT a.listing_id, jsonb_agg(jsonb_build_object(
-                        'slotIndex', a.slot_index, 'type', a.attr_type, 'value', a.attr_value
-                    ) ORDER BY a.slot_index) AS attributes
+                    SELECT a.listing_id,
+                           array_agg(a.slot_index || ':' || a.attr_type || ':' || a.attr_value ORDER BY a.slot_index) AS attr_sig
                     FROM shop_listing_attribute a
                     WHERE a.listing_id IN (SELECT id FROM matching_listings)
                     GROUP BY a.listing_id
                 ), sock_agg AS (
-                    SELECT s.listing_id, jsonb_agg(jsonb_build_object(
-                        'socketIndex', s.socket_index, 'value', s.socket_value
-                    ) ORDER BY s.socket_index) AS sockets
+                    SELECT s.listing_id,
+                           array_agg(s.socket_index || ':' || s.socket_value ORDER BY s.socket_index) AS sock_sig
                     FROM shop_listing_socket s
                     WHERE s.listing_id IN (SELECT id FROM matching_listings)
                     GROUP BY s.listing_id
                 ), matching AS (
                     SELECT l.*,
-                           COALESCE(a.attributes, '[]'::jsonb) AS attributes,
-                           COALESCE(s.sockets, '[]'::jsonb) AS sockets
+                           COALESCE(a.attr_sig, ARRAY[]::text[]) AS attr_sig,
+                           COALESCE(s.sock_sig, ARRAY[]::text[]) AS sock_sig
                     FROM matching_listings l
                     LEFT JOIN attr_agg a ON a.listing_id = l.id
                     LEFT JOIN sock_agg s ON s.listing_id = l.id
                 ), aggregated AS (
                     SELECT min(id) AS listing_id, item_vnum, item_name, quantity, price_raw, unit_price,
                            tail_field, shop_vid, shop_title, owner_name, map_id, channel, x, y, z,
-                           observed_at, attributes, sockets,
+                           observed_at,
                            sum(quantity)::bigint AS total_quantity,
                            sum(price_raw)::bigint AS total_price,
                            count(*)::integer AS listing_count
                     FROM matching
                     GROUP BY observation_id, item_vnum, item_name, quantity, price_raw, unit_price,
                              tail_field, shop_vid, shop_title, owner_name, map_id, channel, x, y, z,
-                             observed_at, attributes, sockets
+                             observed_at, attr_sig, sock_sig
                 )
                 """.formatted(filter);
-        var countSpec = jdbc.sql(baseCte + "SELECT count(*) FROM aggregated")
-                .param("query", "%" + query + "%");
+
         var dataSpec = jdbc.sql(baseCte + """
-                SELECT * FROM aggregated
-                ORDER BY unit_price ASC, observed_at DESC, listing_id DESC
-                LIMIT :size OFFSET :offset
-                """)
-                .param("query", "%" + query + "%").param("size", size).param("offset", (long) page * size);
+                , scored AS (
+                    SELECT *, count(*) OVER() AS total_count
+                    FROM aggregated
+                ), page AS (
+                    SELECT * FROM scored
+                    ORDER BY unit_price ASC, observed_at DESC, listing_id DESC
+                    LIMIT :size OFFSET :offset
+                )
+                SELECT p.*,
+                       COALESCE((SELECT jsonb_agg(jsonb_build_object(
+                           'slotIndex', a.slot_index, 'type', a.attr_type, 'value', a.attr_value)
+                           ORDER BY a.slot_index)
+                           FROM shop_listing_attribute a WHERE a.listing_id = p.listing_id), '[]'::jsonb) AS attributes,
+                       COALESCE((SELECT jsonb_agg(jsonb_build_object(
+                           'socketIndex', s.socket_index, 'value', s.socket_value)
+                           ORDER BY s.socket_index)
+                           FROM shop_listing_socket s WHERE s.listing_id = p.listing_id), '[]'::jsonb) AS sockets
+                FROM page p
+                """);
+        if (hasQuery) {
+            dataSpec = dataSpec.param("query", "%" + query + "%");
+        }
         if (!vnums.isEmpty()) {
-            countSpec = countSpec.param("vnums", vnums);
             dataSpec = dataSpec.param("vnums", vnums);
         }
-        long total = countSpec.query(Long.class).single();
-        List<MarketListingRecord> items = dataSpec.query((rs, rowNum) -> {
+        dataSpec = dataSpec.param("size", size).param("offset", (long) page * size);
+
+        List<RowWithTotal> rows = dataSpec.query((rs, rowNum) -> {
             try {
+                long totalCount = rs.getLong("total_count");
                 OffsetDateTime observedAt = rs.getObject("observed_at", OffsetDateTime.class);
-                return new MarketListingRecord(
+                MarketListingRecord record = new MarketListingRecord(
                         rs.getLong("listing_id"),
                         rs.getInt("item_vnum"),
                         rs.getString("item_name"),
@@ -118,10 +141,29 @@ public class JdbcMarketRepository implements MarketRepository {
                                 rs.getDouble("z")),
                         observedAt != null ? observedAt.toLocalDate() : null
                 );
+                return new RowWithTotal(record, totalCount);
             } catch (Exception e) {
                 throw new SQLException("Cannot decode listing details", e);
             }
         }).list();
+
+        List<MarketListingRecord> items = rows.stream().map(RowWithTotal::record).toList();
+        long total;
+        if (!rows.isEmpty()) {
+            total = rows.getFirst().totalCount();
+        } else if (page == 0) {
+            total = 0;
+        } else {
+            var countSpec = jdbc.sql(baseCte + "SELECT count(*) FROM aggregated");
+            if (hasQuery) {
+                countSpec = countSpec.param("query", "%" + query + "%");
+            }
+            if (!vnums.isEmpty()) {
+                countSpec = countSpec.param("vnums", vnums);
+            }
+            total = countSpec.query(Long.class).single();
+        }
+
         return new MarketListingPage(items, total);
     }
 

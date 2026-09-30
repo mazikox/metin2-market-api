@@ -5,12 +5,6 @@ on:
     branches:
       - main
   workflow_dispatch:
-    inputs:
-      confirm_multiserver_migration:
-        description: Back up production, migrate Pandora, deploy the multiserver API, and verify routes
-        required: true
-        type: boolean
-        default: false
 
 concurrency:
   group: production-backend
@@ -35,7 +29,6 @@ jobs:
         run: bash mvnw test
 
   deploy:
-    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.confirm_multiserver_migration
     needs: test
     runs-on: ubuntu-latest
 
@@ -59,6 +52,8 @@ jobs:
           ssh "$VPS_USER@$VPS_HOST" '
             set -e
             cd ~/metin2-market-api
+            git config core.fileMode false
+            git checkout -- mvnw 2>/dev/null || true
             dirty_checkout="$(git status --porcelain)"
             if [ -n "$dirty_checkout" ]; then
               echo "Production checkout has local files:"
@@ -86,7 +81,7 @@ jobs:
             fi
             git fetch origin main
             git reset --hard origin/main
-            bash ops/deploy-multiserver.sh
+            sudo docker compose up -d --build api
           '
 
       - name: Health check

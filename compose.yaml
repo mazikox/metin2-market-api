@@ -18,6 +18,9 @@ services:
   api:
     build: .
     environment:
+      ANALYTICS_ENABLED: "true"
+      ANALYTICS_SECRET: ${ANALYTICS_SECRET:?ANALYTICS_SECRET is required}
+      ANALYTICS_PROXY_TOKEN: ${ANALYTICS_PROXY_TOKEN:?ANALYTICS_PROXY_TOKEN is required}
       DATABASE_URL: jdbc:postgresql://postgres:5432/metin_market
       DATABASE_USERNAME: metin_market
       DATABASE_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}

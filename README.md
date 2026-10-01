@@ -11,6 +11,8 @@ $env:POSTGRES_PASSWORD = "replace-with-a-private-password"
 $env:SCANNER_TOKEN = "pandora-private-token"
 $env:SCANNER_TOKEN_ELDER = "elder-private-token"
 $env:SCANNER_TOKEN_BEAVIUM = "beavium-private-token"
+$env:ANALYTICS_SECRET = "replace-with-at-least-32-random-characters"
+$env:ANALYTICS_PROXY_TOKEN = "replace-with-another-32-random-characters"
 docker compose up --build
 ```
 
@@ -93,3 +95,10 @@ The production schema move is a controlled operation. Rehearse it on a restored 
 ## Source identity model
 
 `sourceId` identifies one scanner database/installation. It namespaces SQLite's run, observation, and integer listing identities so independent scanners cannot collide. A scan run is separate from an HTTP synchronization batch. Shop VID is stored on each immutable observation, never treated as a permanent shop identity.
+
+## Private catalog statistics
+
+Daily catalog analytics and the Caddy-protected `/admin/stats` panel replace Umami
+and the log-based usage report. Deployment, secrets, schema and retention:
+[docs/statystyki-katalogu.md](docs/statystyki-katalogu.md).
+Analytics defaults to disabled outside Compose. No cookies or persistent client IDs.

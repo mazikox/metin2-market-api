@@ -5,18 +5,38 @@
     encode zstd gzip
     log
 
+    @private path /admin /admin/* /backend/api/v1/admin /backend/api/v1/admin/* /api/v1/admin /api/v1/admin/*
+    basicauth @private {
+        {$STATS_ADMIN_USER} {$STATS_ADMIN_PASSWORD_HASH}
+    }
+    @admin_api path /backend/api/v1/admin /backend/api/v1/admin/* /api/v1/admin /api/v1/admin/*
+    handle @admin_api {
+        header X-Robots-Tag "noindex, nofollow"
+        header Cache-Control "no-store"
+        uri strip_prefix /backend
+        reverse_proxy 127.0.0.1:8080 {
+            header_up X-Analytics-Proxy-Token {$ANALYTICS_PROXY_TOKEN}
+            header_up X-Analytics-Admin {http.auth.user.id}
+            header_up X-Analytics-Client-IP {remote_host}
+        }
+    }
+    @admin_page path /admin /admin/*
+    handle @admin_page {
+        header X-Robots-Tag "noindex, nofollow"
+        header Cache-Control "no-store"
+        rewrite * /index.html
+        file_server
+    }
+
     @market_api path /backend/api/*
     handle @market_api {
         header X-Robots-Tag "noindex"
         uri strip_prefix /backend
-        reverse_proxy 127.0.0.1:8080
-    }
-
-    @metrics path /metrics/script.js /metrics/api/send
-    handle @metrics {
-        header X-Robots-Tag "noindex"
-        uri strip_prefix /metrics
-        reverse_proxy 127.0.0.1:3000
+        reverse_proxy 127.0.0.1:8080 {
+            header_up X-Analytics-Proxy-Token {$ANALYTICS_PROXY_TOKEN}
+            header_up X-Analytics-Client-IP {remote_host}
+            header_up -X-Analytics-Admin
+        }
     }
 
     handle {
@@ -61,10 +81,26 @@ Allow: /
 
 # Existing service endpoints retained for compatibility.
 api.mazikox.pl {
-    reverse_proxy 127.0.0.1:8080
-}
-analytics.mazikox.pl {
-    reverse_proxy 127.0.0.1:3000
+    @private path /api/v1/admin /api/v1/admin/*
+    handle @private {
+        basicauth {
+            {$STATS_ADMIN_USER} {$STATS_ADMIN_PASSWORD_HASH}
+        }
+        header Cache-Control "no-store"
+        header X-Robots-Tag "noindex, nofollow"
+        reverse_proxy 127.0.0.1:8080 {
+            header_up X-Analytics-Proxy-Token {$ANALYTICS_PROXY_TOKEN}
+            header_up X-Analytics-Admin {http.auth.user.id}
+            header_up X-Analytics-Client-IP {remote_host}
+        }
+    }
+    handle {
+        reverse_proxy 127.0.0.1:8080 {
+            header_up X-Analytics-Proxy-Token {$ANALYTICS_PROXY_TOKEN}
+            header_up X-Analytics-Client-IP {remote_host}
+            header_up -X-Analytics-Admin
+        }
+    }
 }
 pandora.mazikox.pl {
     redir https://metin2market.mazikox.pl{uri} permanent

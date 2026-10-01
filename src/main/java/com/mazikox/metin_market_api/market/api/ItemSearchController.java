@@ -1,5 +1,7 @@
 package com.mazikox.metin_market_api.market.api;
 
+import com.mazikox.metin_market_api.analytics.AnalyticsService;
+import jakarta.servlet.http.HttpServletRequest;
 import com.mazikox.metin_market_api.market.application.GetItemStatistics;
 import com.mazikox.metin_market_api.market.application.GetItemSuggestions;
 import com.mazikox.metin_market_api.market.application.SearchItems;
@@ -18,6 +20,8 @@ import java.util.List;
 @RestController
 @RequestMapping({"/api/v1/items", "/api/v1/servers/{server}/items"})
 public class ItemSearchController {
+    private final AnalyticsService analytics;
+
     public static final int MAX_VNUMS = 100;
     private final SearchItems searchItems;
     private final GetItemSuggestions getItemSuggestions;
@@ -26,7 +30,9 @@ public class ItemSearchController {
     public ItemSearchController(
             SearchItems searchItems,
             GetItemSuggestions getItemSuggestions,
-            GetItemStatistics getItemStatistics) {
+            GetItemStatistics getItemStatistics,
+            AnalyticsService analytics) {
+        this.analytics = analytics;
         this.searchItems = searchItems;
         this.getItemSuggestions = getItemSuggestions;
         this.getItemStatistics = getItemStatistics;
@@ -34,11 +40,15 @@ public class ItemSearchController {
 
     @GetMapping
     public SearchPage search(
+            HttpServletRequest request,
             @RequestParam(defaultValue = "") String query,
             @RequestParam(required = false) @Size(max = MAX_VNUMS) List<@Min(1) Integer> vnum,
             @RequestParam(defaultValue = "0") @Min(0) int page,
             @RequestParam(defaultValue = "20") @Min(1) @Max(100) int size) {
-        return searchItems.search(query.strip(), vnum == null ? List.of() : vnum.stream().distinct().toList(), page, size);
+        List<Integer> selected = vnum == null ? List.of() : vnum.stream().distinct().toList();
+        SearchPage results = searchItems.search(query.strip(), selected, page, size);
+        analytics.record(request, page, query.strip(), selected);
+        return results;
     }
 
     @GetMapping("/suggestions")

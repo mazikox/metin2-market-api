@@ -1,0 +1,10 @@
+[Unit]
+Description=Hourly catalog analytics retention (also when API is stopped)
+
+[Timer]
+OnCalendar=hourly
+Persistent=true
+Unit=metin2bazar-analytics-retention.service
+
+[Install]
+WantedBy=timers.target

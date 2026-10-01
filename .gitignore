@@ -53,6 +53,10 @@ replay_pid*
 Thumbs.db
 Desktop.ini
 
-# Private local report generated from server logs
-/usage-report.html
 ops/__pycache__/
+
+# Preserve privacy of any historical local report (the generator was retired).
+/usage-report.html
+
+# Windows-user-encrypted admin credentials; never commit local secret material.
+.private/

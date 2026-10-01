@@ -36,6 +36,10 @@ public final class ServerDataSources implements AutoCloseable {
                 migrate(pool, server);
             }
 
+            Flyway.configure().dataSource(pools.get(GameServer.PANDORA))
+                    .locations("classpath:db/analytics").schemas("analytics")
+                    .defaultSchema("analytics").createSchemas(true).load().migrate();
+
             Map<Object, Object> targets = new HashMap<>();
             pools.forEach(targets::put);
 

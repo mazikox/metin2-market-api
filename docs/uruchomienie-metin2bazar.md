@@ -1,3 +1,5 @@
+> Dokument historyczny opisujący uruchomienie domeny. Analityka Umami i zgoda opisane poniżej zostały zastąpione. Aktualne wdrożenie statystyk: [statystyki-katalogu.md](statystyki-katalogu.md). Nie uruchamiaj starych instrukcji dotyczących Umami.
+
 # Uruchomienie metin2bazar.pl
 
 Stan na 1 października 2026: DNS, HTTPS i konfiguracja Caddy są aktywne.
@@ -40,8 +42,7 @@ Nie usuwać rekordów MX/TXT poczty, jeśli istnieją. DNS nie blokuje indeksowa
    tej wersji. Zweryfikować docelowy plik `sudo caddy validate --config ... --adapter caddyfile`,
    zainstalować go do `/etc/caddy/Caddyfile` i wykonać `sudo systemctl reload caddy`.
    Po poprawnym DNS Caddy uzyska certyfikaty HTTPS dla obu nowych hostów.
-7. Przy aktywacji ustawić nazwę i domenę istniejącej witryny w Umami; przygotowano
-   `ops/umami-metin2bazar.sql`. Nie resetować istniejących statystyk ani nagrywania sesji.
+7. Skonfigurować backendowe statystyki i prywatny panel według `statystyki-katalogu.md`. Zachować historyczną bazę Umami.
 8. Sprawdzić publicznie HTTPS, przekierowanie www, API wszystkich trzech serwerów, podstrony,
    robots, sitemapę, 404 i skrypt analityki. Na starej domenie potwierdzić noindex, działający katalog,
    API i wyłączenie sitemapy. Dopiero potem zgłosić nową domenę/sitemapę w Search Console.

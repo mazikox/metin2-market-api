@@ -43,3 +43,15 @@ Aby zatrzymać przyszłe czyszczenie, wyłączyć timer oraz przywrócić poprze
 ## Granice kontroli
 
 Retencja dotyczy aktywnej bazy Umami i lokalnych dzienników VPS. Panel OVH potwierdził codzienny automatyczny backup o 01:30 UTC i jeden dostępny punkt przywracania. Usunięte dane mogą pozostać w ostatniej kopii do zastąpienia kolejną; po przywróceniu należy ponownie wykonać czyszczenie. Osobne snapshoty i retencja własnych logów dostawcy nie zostały potwierdzone. Nie deklarować, że lokalny mechanizm obejmuje wszystkie kopie danych poza VPS.
+
+## Nowe statystyki katalogu
+
+Hourly timer `metin2bazar-analytics-retention.timer` usuwa dzienne pseudonimy po
+zakończeniu dnia i tokeny operacji po 47 godzinach (maksymalnie 48h przy działającym
+harmonogramie). Działa niezależnie od procesu API. Szczegóły instalacji w
+[statystyki-katalogu.md](statystyki-katalogu.md).
+Dotychczasowy dzienny timer oraz SQL retencji Umami pozostają tymczasowo dla
+historycznej bazy: nie resetujemy jej i nie przedłużamy poprzedniej retencji.
+Nie wyłączaj kontenera bazy Umami przed decyzją o archiwizacji/usunięciu danych;
+możesz zatrzymać sam kontener aplikacji Umami. Po zamknięciu retencji historycznych
+danych usuń wywołanie Umami ze starego skryptu, zachowując retencję journald.

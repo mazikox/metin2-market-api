@@ -1,0 +1,11 @@
+[Unit]
+Description=Expire daily catalog pseudonyms and operation tokens
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/metin2bazar-analytics-retention
+User=root
+UMask=0077
+TimeoutStartSec=60

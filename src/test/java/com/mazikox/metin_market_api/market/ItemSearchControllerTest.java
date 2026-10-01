@@ -42,7 +42,8 @@ class ItemSearchControllerTest {
     static class TestConfig {
         @Bean
         public ItemSearchController itemSearchController() {
-            return new ItemSearchController(searchItems, getItemSuggestions, getItemStatistics);
+            return new ItemSearchController(searchItems, getItemSuggestions, getItemStatistics,
+                    mock(com.mazikox.metin_market_api.analytics.AnalyticsService.class));
         }
 
         @Bean

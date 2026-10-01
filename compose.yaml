@@ -21,6 +21,7 @@ services:
       DATABASE_URL: jdbc:postgresql://postgres:5432/metin_market
       DATABASE_USERNAME: metin_market
       DATABASE_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-https://metin2bazar.pl,https://www.metin2bazar.pl,https://mazikox.pl,https://*.mazikox.pl,http://localhost:5173}
       SCANNER_TOKEN: ${SCANNER_TOKEN:?SCANNER_TOKEN is required}
       SCANNER_TOKEN_ELDER: ${SCANNER_TOKEN_ELDER:?SCANNER_TOKEN_ELDER is required}
       SCANNER_TOKEN_BEAVIUM: ${SCANNER_TOKEN_BEAVIUM:?SCANNER_TOKEN_BEAVIUM is required}

@@ -52,7 +52,7 @@ class CorsConfigurationTest {
     static class TestConfig {
         @Bean
         public List<String> allowedOrigins() {
-            return List.of("https://mazikox.pl", "https://*.mazikox.pl", "http://localhost:5173");
+            return List.of("https://metin2bazar.pl", "https://www.metin2bazar.pl", "https://mazikox.pl", "https://*.mazikox.pl", "http://localhost:5173");
         }
 
         @Bean
@@ -89,6 +89,15 @@ class CorsConfigurationTest {
                         .header("Origin", "https://pandora.mazikox.pl"))
                 .andExpect(status().isOk())
                 .andExpect(header().string("Access-Control-Allow-Origin", "https://pandora.mazikox.pl"));
+    }
+
+    @Test
+    void allowsNewDomainAndWwwOnApi() throws Exception {
+        for (String origin : List.of("https://metin2bazar.pl", "https://www.metin2bazar.pl")) {
+            mockMvc.perform(get("/api/v1/test").header("Origin", origin))
+                    .andExpect(status().isOk())
+                    .andExpect(header().string("Access-Control-Allow-Origin", origin));
+        }
     }
 
     @Test

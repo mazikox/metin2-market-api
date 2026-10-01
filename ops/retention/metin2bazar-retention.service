@@ -1,0 +1,11 @@
+[Unit]
+Description=Expire VPS journals and Metin2 Bazar analytics
+After=docker.service systemd-journald.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/metin2bazar-retention
+User=root
+UMask=0077
+TimeoutStartSec=180

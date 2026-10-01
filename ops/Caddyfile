@@ -1,0 +1,75 @@
+# Active production routing; DNS points at the VPS.
+# Both catalog domains serve one build and one backend.
+(metin2bazar_catalog) {
+    root * /var/www/metin2bazar
+    encode zstd gzip
+    log
+
+    @market_api path /backend/api/*
+    handle @market_api {
+        header X-Robots-Tag "noindex"
+        uri strip_prefix /backend
+        reverse_proxy 127.0.0.1:8080
+    }
+
+    @metrics path /metrics/script.js /metrics/api/send
+    handle @metrics {
+        header X-Robots-Tag "noindex"
+        uri strip_prefix /metrics
+        reverse_proxy 127.0.0.1:3000
+    }
+
+    handle {
+        file_server
+    }
+    handle_errors {
+        @not_found expression `{http.error.status_code} == 404`
+        handle @not_found {
+            rewrite * /404.html
+            file_server
+        }
+        handle {
+            respond "{http.error.status_code} {http.error.status_text}"
+        }
+    }
+}
+
+metin2bazar.pl {
+    import metin2bazar_catalog
+}
+
+www.metin2bazar.pl {
+    redir https://metin2bazar.pl{uri} permanent
+}
+
+# Compatibility: accessible mirror, excluded from indexing.
+metin2market.mazikox.pl {
+    header X-Robots-Tag "noindex"
+    @mirror_robots path /robots.txt
+    handle @mirror_robots {
+        header Content-Type "text/plain; charset=utf-8"
+        respond "User-agent: *
+Allow: /
+" 200
+    }
+    @mirror_sitemap path /sitemap.xml
+    handle @mirror_sitemap {
+        respond "" 404
+    }
+    import metin2bazar_catalog
+}
+
+# Existing service endpoints retained for compatibility.
+api.mazikox.pl {
+    reverse_proxy 127.0.0.1:8080
+}
+analytics.mazikox.pl {
+    reverse_proxy 127.0.0.1:3000
+}
+pandora.mazikox.pl {
+    redir https://metin2market.mazikox.pl{uri} permanent
+}
+game.mazikox.pl {
+    root * /var/www/game
+    file_server
+}

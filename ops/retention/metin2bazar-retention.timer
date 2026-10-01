@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily retention of Metin2 Bazar data
+
+[Timer]
+OnCalendar=*-*-* 03:00:00 UTC
+Persistent=true
+RandomizedDelaySec=5m
+Unit=metin2bazar-retention.service
+
+[Install]
+WantedBy=timers.target

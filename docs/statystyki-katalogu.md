@@ -61,7 +61,12 @@ Na VPS znajduje się tylko hash bcrypt. Aby skopiować hasło, z katalogu repo A
 .\ops\get-stats-login.ps1 -CopyPassword
 ```
 
-Otwórz `https://metin2bazar.pl/admin/stats`, podaj login `admin` i wklej hasło.
+Najprościej kliknij dwukrotnie skrót na pulpicie **Haslo panelu Metin2 Bazar**.
+Skopiuje hasło bez otwierania terminala i pokaże potwierdzenie. Skrót nie zawiera hasła.
+Jeśli potrzebujesz utworzyć go ponownie, uruchom `ops/create-stats-login-shortcut.ps1`.
+Skrypty mają UTF-8 z BOM i działają również w Windows PowerShell 5.1.
+
+Otwórz `https://metin2bazar.pl/admin/stats`, podaj login `admin` i wklej hasło (Ctrl+V).
 Zapisz je w menedżerze haseł: plik DPAPI nie jest przenośną kopią na inny komputer/profil Windows.
 Po logowaniu wyczyść schowek przez `Set-Clipboard -Value ""`.
 Sam skrypt bez `-CopyPassword` pokazuje wyłącznie adres panelu i login.

@@ -1,10 +1,176 @@
 # Metin Market API
 
-Spring Boot 4.1.1 / Java 26 backend for synchronizing Metin2 scanner observations into PostgreSQL and searching the historical listings.
+Production backend for **Metin2 Bazar** — ingesting marketplace scan data, storing immutable observations in PostgreSQL, and exposing server-specific search and statistics APIs.
+
+**Live application:** [metin2bazar.pl](https://metin2bazar.pl) · **Frontend:** [mazikox/metin2-market-web](https://github.com/mazikox/metin2-market-web)
+
+[![Deploy backend](https://github.com/mazikox/metin2-market-api/actions/workflows/deploy.yml/badge.svg)](https://github.com/mazikox/metin2-market-api/actions/workflows/deploy.yml)
+![Java](https://img.shields.io/badge/Java-26-ED8B00?logo=openjdk&logoColor=white)
+![Spring Boot](https://img.shields.io/badge/Spring%20Boot-4.1.1-6DB33F?logo=springboot&logoColor=white)
+![PostgreSQL](https://img.shields.io/badge/PostgreSQL-18-4169E1?logo=postgresql&logoColor=white)
+![Docker](https://img.shields.io/badge/Docker-production-2496ED?logo=docker&logoColor=white)
+
+> Independent community project. Not affiliated with Gameforge.
+
+## What it does
+
+Market scanners publish batches of observed Metin2 shop listings to this API. The backend validates and deduplicates those observations, stores them in PostgreSQL, and serves them through read APIs used by the public web application.
+
+The system currently handles separate catalogs for **Pandora**, **Elder**, and **Beavium**.
+
+## Engineering highlights
+
+### Idempotent ingestion
+
+Scanner imports are designed to be safe to retry.
+
+- each batch is identified by `sourceId + batchId`,
+- replaying the same batch and payload returns `alreadyProcessed: true`,
+- reusing a batch identity with different data returns HTTP 409,
+- observations are additionally deduplicated by `sourceId + observationId`,
+- changed fingerprints or conflicting observation payloads are rejected.
+
+This keeps synchronization resilient to retries and partial network failures without silently duplicating market data.
+
+### Multi-server data isolation
+
+The API exposes server-specific routes and stores each server in its own PostgreSQL schema.
+
+```text
+pandora
+elder
+beavium
+```
+
+Flyway applies the same migration set independently to each schema at startup. The server is selected by the route, not by client-provided payload data.
+
+### Historical market model
+
+The API stores observations as historical records rather than trying to infer whether a shop is still active.
+
+Each result can include:
+
+- item identity and VNUM,
+- price and quantity,
+- indexed attributes and sockets,
+- observation timestamp,
+- shop VID, title and owner,
+- map, channel and coordinates.
+
+Search results are returned newest-first.
+
+### Production deployment and routing
+
+The backend is deployed to a Linux VPS and runs behind Caddy.
+
+Production deployment includes:
+
+1. automated tests,
+2. remote application rebuild,
+3. Caddy configuration validation,
+4. Caddy config synchronization and reload,
+5. API health checks across all supported servers,
+6. routing smoke tests against the public site.
+
+The same Caddy configuration also proxies the frontend's `/backend/api/... ` requests to this service.
+
+### Integration testing
+
+The test suite uses **Testcontainers** with PostgreSQL.
+
+Integration tests verify real persistence behavior, Flyway migrations, scanner imports, deduplication, search results, and related child data against an actual PostgreSQL container instead of an in-memory database.
+
+### Privacy-conscious catalog statistics
+
+The project includes private usage statistics for the public catalog without third-party analytics scripts, advertising trackers, cookies, or persistent analytics identifiers.
+
+Administrative statistics are exposed through protected routes and served behind Caddy authentication.
+
+## Architecture
+
+```mermaid
+flowchart LR
+    Scanner["Market scanners"] -->|authenticated batches| API["Spring Boot API"]
+    API -->|JDBC| DB[("PostgreSQL")]
+
+    Browser["Metin2 Bazar frontend"] -->|/backend/api/...| Caddy["Caddy"]
+    Caddy --> API
+
+    Actions["GitHub Actions"] -->|test + deploy| VPS["Linux VPS"]
+    VPS --- API
+    VPS --- Caddy
+```
+
+## Tech stack
+
+| Area | Technology |
+| --- | --- |
+| Runtime | Java 26 |
+| Framework | Spring Boot 4.1.1 |
+| Web API | Spring MVC |
+| Persistence | Spring JDBC |
+| Database | PostgreSQL 18 |
+| Migrations | Flyway |
+| Validation | Jakarta Validation / Spring Validation |
+| Testing | Spring Boot Test, Testcontainers |
+| Infrastructure | Docker, Caddy, Linux VPS |
+| CI/CD | GitHub Actions, SSH deployment |
+
+## API overview
+
+Server-specific public routes:
+
+| Server | Search | Suggestions | Statistics |
+| --- | --- | --- | --- |
+| Pandora | `/api/v1/servers/pandora/items` | `/api/v1/servers/pandora/items/suggestions` | `/api/v1/servers/pandora/items/statistics` |
+| Elder | `/api/v1/servers/elder/items` | `/api/v1/servers/elder/items/suggestions` | `/api/v1/servers/elder/items/statistics` |
+| Beavium | `/api/v1/servers/beavium/items` | `/api/v1/servers/beavium/items/suggestions` | `/api/v1/servers/beavium/items/statistics` |
+
+Scanner imports use matching protected routes:
+
+```text
+/internal/v1/servers/pandora/imports
+/internal/v1/servers/elder/imports
+/internal/v1/servers/beavium/imports
+```
+
+Legacy non-server-prefixed public routes remain aliases for Pandora for compatibility.
+
+### Search example
+
+```bash
+curl "http://localhost:8080/api/v1/servers/pandora/items?query=Zatruty&page=0&size=20"
+```
+
+Search is case-insensitive and can also be narrowed by exact VNUM values.
+
+## Project structure
+
+```text
+src/main/java/          application code
+src/main/resources/     configuration and Flyway migrations
+src/test/               automated and integration tests
+ops/Caddyfile           production reverse-proxy configuration
+docs/                   operational and migration documentation
+tools/                  development/import utilities
+samples/                sample scanner data
+Dockerfile              API image
+compose.yaml             local PostgreSQL + API environment
+update_market.py         scanner synchronization utility
+```
 
 ## Run locally
 
-The simplest route starts PostgreSQL and the API together (including a Java 26 build):
+### Requirements
+
+- Docker
+- Java 26 if running the application outside Docker
+
+### Docker Compose
+
+Set the required secrets and start PostgreSQL together with the API.
+
+PowerShell:
 
 ```powershell
 $env:POSTGRES_PASSWORD = "replace-with-a-private-password"
@@ -13,92 +179,91 @@ $env:SCANNER_TOKEN_ELDER = "elder-private-token"
 $env:SCANNER_TOKEN_BEAVIUM = "beavium-private-token"
 $env:ANALYTICS_SECRET = "replace-with-at-least-32-random-characters"
 $env:ANALYTICS_PROXY_TOKEN = "replace-with-another-32-random-characters"
+
 docker compose up --build
 ```
 
-The API listens on `http://localhost:8080`. On startup Flyway applies the shared migrations separately in the `pandora`, `elder`, and `beavium` schemas. PostgreSQL data is retained in the `metin-market-postgres-v18` Docker volume. The database is also available on localhost port `15432` by default; set `POSTGRES_PORT` before starting Compose to change it.
+The API is available at:
 
-To run the API from an installed Java 26 JDK instead:
+```text
+http://localhost:8080
+```
+
+PostgreSQL is exposed on localhost port `15432` by default.
+
+### Run the application from the JDK
+
+Start PostgreSQL first:
 
 ```powershell
-$env:POSTGRES_PASSWORD = "replace-with-a-private-password"
-$env:SCANNER_TOKEN = "pandora-private-token"
-$env:SCANNER_TOKEN_ELDER = "elder-private-token"
-$env:SCANNER_TOKEN_BEAVIUM = "beavium-private-token"
 docker compose up -d postgres
+```
+
+Then configure the database connection and run Spring Boot:
+
+```powershell
 $env:DATABASE_URL = "jdbc:postgresql://localhost:15432/metin_market"
 $env:DATABASE_PASSWORD = $env:POSTGRES_PASSWORD
+
 ./mvnw.cmd spring-boot:run
 ```
 
-## API
+## Import data
 
-Import a batch (the sample is taken from `samples/eldersuite-history-pandora.db`):
+Example protected import:
 
 ```powershell
-curl.exe -X POST http://localhost:8080/internal/v1/imports `
+curl.exe -X POST http://localhost:8080/internal/v1/servers/pandora/imports `
   -H "Content-Type: application/json" `
   -H "X-Scanner-Token: $env:SCANNER_TOKEN" `
   --data-binary "@samples/import-example.json"
 ```
 
-The legacy routes above are permanent aliases for Pandora. Server-specific routes are:
+Each server requires its matching scanner token.
 
-| Server | Search | Suggestions | Statistics | Import |
-| --- | --- | --- | --- | --- |
-| Pandora | `/api/v1/servers/pandora/items` | `/api/v1/servers/pandora/items/suggestions` | `/api/v1/servers/pandora/items/statistics` | `/internal/v1/servers/pandora/imports` |
-| Elder | `/api/v1/servers/elder/items` | `/api/v1/servers/elder/items/suggestions` | `/api/v1/servers/elder/items/statistics` | `/internal/v1/servers/elder/imports` |
-| Beavium | `/api/v1/servers/beavium/items` | `/api/v1/servers/beavium/items/suggestions` | `/api/v1/servers/beavium/items/statistics` | `/internal/v1/servers/beavium/imports` |
+A development utility is also available for importing existing SQLite market history through the same HTTP API:
 
-Each import route accepts the same JSON and requires the matching `X-Scanner-Token`: `SCANNER_TOKEN` for Pandora, `SCANNER_TOKEN_ELDER` for Elder, or `SCANNER_TOKEN_BEAVIUM` for Beavium. The database schema is selected by the route and is not taken from the request body.
-
-Retrying the same `sourceId` + `batchId` and payload returns `alreadyProcessed: true`. Reusing that batch identity with different data returns HTTP 409. Observations are also deduplicated by `sourceId` + `observationId`; a changed fingerprint or observation payload is rejected.
-
-Search by case-insensitive item-name fragment, optionally with an exact vnum:
-
-```powershell
-curl.exe "http://localhost:8080/api/v1/items?query=Zatruty&page=0&size=20"
-curl.exe "http://localhost:8080/api/v1/items?vnum=180&query="
-```
-
-Every result contains price and quantity, indexed attributes and sockets, observation time, and the observed shop's VID/title/owner, map, channel, and coordinates. Results are historical and newest-first; the API deliberately does not infer whether a listing is still active.
-
-## Test
-
-With Java 26 and Docker running:
-
-```powershell
-./mvnw.cmd test
-```
-
-The integration test starts PostgreSQL 18 with Testcontainers, applies Flyway, imports a real-shaped observation twice, and verifies search output and child data.
-
-## Import the supplied SQLite history
-
-The one-off development utility reads only the market tables from SQLite and sends them through the protected HTTP API in batches:
-
-```powershell
+```bash
 python tools/import_sqlite.py
 ```
 
-Defaults target `samples/eldersuite-history-pandora.db`, `http://localhost:8080`, source `eldersuite-pandora-main`, and the development token `local-dev-token`. Run `python tools/import_sqlite.py --help` to override them. Each invocation uses new synchronization batch IDs; stable source observation IDs let the API safely deduplicate reruns.
-
-Pandora keeps those defaults. For Elder and Beavium, pass `--server`, `--database`, and `--source-id`, and set `SCANNER_TOKEN_ELDER` or `SCANNER_TOKEN_BEAVIUM`. Example:
+For server-specific scanner synchronization:
 
 ```powershell
-$env:SCANNER_TOKEN_ELDER = "replace-with-a-private-token"
 python update_market.py --server elder --database "C:\path\to\elder-history.db" --source-id "eldersuite-elder-main" --dry-run
 ```
 
-The production schema move is a controlled operation. Rehearse it on a restored database copy first. The manual `Deploy backend` workflow on `main`, with `confirm_multiserver_migration` enabled, checks the VPS Compose setup, verifies a database backup, migrates Pandora, deploys the API, and checks all server routes. It retains the backup under `~/metin-market-db-backups` and attempts to restore the previous schema and API image if startup checks fail. The workflow requires all three scanner tokens in the VPS `.env`. See [docs/multi-server-migration-plan.md](docs/multi-server-migration-plan.md).
+## Tests
+
+With Docker available:
+
+```bash
+./mvnw test
+```
+
+The suite starts PostgreSQL with Testcontainers, applies migrations, performs real-shaped imports, and verifies persisted search data.
 
 ## Source identity model
 
-`sourceId` identifies one scanner database/installation. It namespaces SQLite's run, observation, and integer listing identities so independent scanners cannot collide. A scan run is separate from an HTTP synchronization batch. Shop VID is stored on each immutable observation, never treated as a permanent shop identity.
+`sourceId` identifies a scanner installation/database and namespaces scanner-local identities so independent scanners cannot collide.
 
-## Private catalog statistics
+A scanner run is distinct from an HTTP synchronization batch. Shop VID is stored as part of an observation and is not treated as a permanent shop identity.
 
-Daily catalog analytics and the Caddy-protected `/admin/stats` panel replace Umami
-and the log-based usage report. Deployment, secrets, schema and retention:
-[docs/statystyki-katalogu.md](docs/statystyki-katalogu.md).
-Analytics defaults to disabled outside Compose. No cookies or persistent client IDs.
+## Operations documentation
+
+More detailed operational procedures live in `docs/`, including migration and private statistics documentation.
+
+The main README intentionally focuses on the system architecture, public API, development setup, and production engineering model.
+
+## Related repository
+
+### [metin2-market-web](https://github.com/mazikox/metin2-market-web)
+
+React / TypeScript frontend responsible for:
+
+- server selection and marketplace UI,
+- item search and price comparison,
+- client-side resilience and saved searches,
+- generated SEO metadata and static information pages,
+- canonical routing and sitemap generation,
+- frontend CI/CD and production HTTP smoke tests.

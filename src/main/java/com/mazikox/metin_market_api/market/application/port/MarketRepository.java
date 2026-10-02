@@ -1,6 +1,7 @@
 package com.mazikox.metin_market_api.market.application.port;
 
 import com.mazikox.metin_market_api.market.api.ItemSearchResult;
+import com.mazikox.metin_market_api.market.domain.ItemPriceStatisticsCalculator.RawListing;
 import com.mazikox.metin_market_api.market.domain.ItemSuggestion;
 
 import java.time.LocalDate;
@@ -28,8 +29,6 @@ public interface MarketRepository {
 
     record MarketListingPage(List<MarketListingRecord> items, long totalElements) {}
 
-    record ShopPrice(int vnum, String itemName, long price, long rawOfferCount, long totalQuantity) {}
-
     MarketListingPage searchListings(String query, List<Integer> vnums, int page, int size);
 
     long countCatalogItems(String query, Integer vnum);
@@ -38,5 +37,5 @@ public interface MarketRepository {
 
     List<ItemSuggestion> findCatalogItems(String query, Integer vnum, int limit);
 
-    List<ShopPrice> findShopPrices(List<Integer> vnums);
+    List<RawListing> findCanonicalListings(List<Integer> vnums);
 }

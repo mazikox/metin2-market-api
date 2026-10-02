@@ -2,6 +2,7 @@ package com.mazikox.metin_market_api.market.infrastructure.jdbc;
 
 import com.mazikox.metin_market_api.market.api.ItemSearchResult;
 import com.mazikox.metin_market_api.market.application.port.MarketRepository;
+import com.mazikox.metin_market_api.market.domain.ItemPriceStatisticsCalculator.RawListing;
 import com.mazikox.metin_market_api.market.domain.ItemSuggestion;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Repository;
@@ -42,13 +43,22 @@ public class JdbcMarketRepository implements MarketRepository {
                     WHERE state = 3 AND publishable = true
                     ORDER BY ended_at DESC NULLS LAST, started_at DESC, id DESC
                     LIMIT 1
+                ), ranked_observations AS (
+                    SELECT o.*,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY COALESCE(o.shop_vid::text, 'obs:' || o.id::text)
+                               ORDER BY o.observed_at DESC, o.id DESC
+                           ) AS rn
+                    FROM latest_run r
+                    JOIN shop_observation o ON o.scan_run_id = r.id
+                ), canonical_observations AS (
+                    SELECT * FROM ranked_observations WHERE rn = 1
                 ), matching_listings AS (
                     SELECT l.id, l.observation_id, l.item_vnum, l.item_name, l.quantity,
                            l.price_raw, l.unit_price, l.tail_field,
                            o.shop_vid, o.shop_title, o.owner_name, o.map_id, o.channel,
                            o.x, o.y, o.z, o.observed_at
-                    FROM latest_run r
-                    JOIN shop_observation o ON o.scan_run_id = r.id
+                    FROM canonical_observations o
                     JOIN shop_listing l ON l.observation_id = o.id
                     WHERE %s
                 ), attr_agg AS (
@@ -241,7 +251,10 @@ public class JdbcMarketRepository implements MarketRepository {
     }
 
     @Override
-    public List<ShopPrice> findShopPrices(List<Integer> vnums) {
+    public List<RawListing> findCanonicalListings(List<Integer> vnums) {
+        if (vnums == null || vnums.isEmpty()) {
+            return List.of();
+        }
         String placeholders = String.join(", ", vnums.stream().map(vnum -> ":vnum" + vnum).toList());
         var query = jdbc.sql("""
                 WITH latest_run AS (
@@ -249,29 +262,33 @@ public class JdbcMarketRepository implements MarketRepository {
                     WHERE state = 3 AND publishable = true
                     ORDER BY ended_at DESC NULLS LAST, started_at DESC, id DESC
                     LIMIT 1
-                ), per_shop AS (
-                    SELECT l.item_vnum, min(l.item_name) AS item_name, l.observation_id,
-                           min(l.unit_price) AS cheapest_unit_price, count(*) AS raw_offer_count,
-                           sum(l.quantity)::bigint AS total_quantity
+                ), ranked_observations AS (
+                    SELECT o.*,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY COALESCE(o.shop_vid::text, 'obs:' || o.id::text)
+                               ORDER BY o.observed_at DESC, o.id DESC
+                           ) AS rn
                     FROM latest_run r
                     JOIN shop_observation o ON o.scan_run_id = r.id
-                    JOIN shop_listing l ON l.observation_id = o.id
-                    WHERE l.item_vnum IN (%s)
-                    GROUP BY l.item_vnum, l.observation_id
+                ), canonical_observations AS (
+                    SELECT * FROM ranked_observations WHERE rn = 1
                 )
-                SELECT item_vnum, item_name, cheapest_unit_price, raw_offer_count, total_quantity
-                FROM per_shop
-                ORDER BY item_vnum, cheapest_unit_price
+                SELECT l.item_vnum, l.item_name, l.unit_price, l.quantity,
+                       COALESCE(o.shop_vid::text, 'obs:' || o.id::text) AS shop_key
+                FROM canonical_observations o
+                JOIN shop_listing l ON l.observation_id = o.id
+                WHERE l.item_vnum IN (%s)
+                ORDER BY l.item_vnum, l.unit_price ASC
                 """.formatted(placeholders));
         for (Integer vnum : vnums) {
             query = query.param("vnum" + vnum, vnum);
         }
-        return query.query((rs, row) -> new ShopPrice(
+        return query.query((rs, row) -> new RawListing(
                 rs.getInt("item_vnum"),
                 rs.getString("item_name"),
-                rs.getLong("cheapest_unit_price"),
-                rs.getLong("raw_offer_count"),
-                rs.getLong("total_quantity")
+                rs.getLong("unit_price"),
+                rs.getInt("quantity"),
+                rs.getString("shop_key")
         )).list();
     }
 

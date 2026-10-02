@@ -163,7 +163,7 @@ class MarketApiIntegrationTest {
                       ]
                     },
                     {
-                      "observationId": "presentation-shop-b", "runId": "presentation-run-1", "shopVid": 9001, "shopTitle": "B",
+                      "observationId": "presentation-shop-b", "runId": "presentation-run-1", "shopVid": 9003, "shopTitle": "B",
                       "ownerName": "Tester", "mapId": "test", "channel": 1, "x": 2, "y": 2, "z": 0,
                       "observedAt": "2026-09-12T10:01:00Z", "itemCount": 1, "contentFingerprint": "presentation-b",
                       "listings": [
@@ -241,8 +241,17 @@ class MarketApiIntegrationTest {
         assertThat(statistics.path("minimumPrice").asLong()).isEqualTo(30);
         assertThat(statistics.path("meanPrice").decimalValue()).isEqualByComparingTo("34");
         assertThat(statistics.path("medianPrice").decimalValue()).isEqualByComparingTo("32");
+        assertThat(statistics.path("trimmedMeanPrice").decimalValue()).isEqualByComparingTo("34");
         assertThat(statistics.path("contributingShopCount").asLong()).isEqualTo(3);
         assertThat(statistics.path("rawOfferCount").asLong()).isEqualTo(4);
+        assertThat(statistics.path("percentiles").path("p20").asLong()).isEqualTo(30);
+        assertThat(statistics.path("percentiles").path("p50").asLong()).isEqualTo(32);
+        assertThat(statistics.path("percentiles").path("p75").asLong()).isEqualTo(40);
+        assertThat(statistics.path("buyerReference").path("price").asLong()).isEqualTo(30);
+        assertThat(statistics.path("buyerReference").path("shopsAtOrBelow").asLong()).isEqualTo(1);
+        assertThat(statistics.path("buyerReference").path("quantityAtOrBelow").asLong()).isEqualTo(1);
+        assertThat(statistics.path("depth")).isNotEmpty();
+        assertThat(statistics.path("histogram")).isNotEmpty();
 
         JsonNode familyStatistics = getJson(http, "/api/v1/items/statistics?vnum=777&vnum=9000").path("items");
         assertThat(familyStatistics).hasSize(2);
@@ -448,7 +457,7 @@ class MarketApiIntegrationTest {
         JsonNode stats3000 = getJson(http, "/api/v1/items/statistics?vnum=3000").path("items").get(0);
         assertThat(stats3000.path("minimumPrice").asLong()).isEqualTo(5000);
         assertThat(stats3000.path("meanPrice").decimalValue()).isEqualByComparingTo("5500");
-        assertThat(stats3000.path("medianPrice").decimalValue()).isEqualByComparingTo("5500");
+        assertThat(stats3000.path("medianPrice").decimalValue()).isEqualByComparingTo("5000");
         assertThat(stats3000.path("contributingShopCount").asLong()).isEqualTo(2);
         assertThat(stats3000.path("rawOfferCount").asLong()).isEqualTo(2);
 
@@ -499,6 +508,141 @@ class MarketApiIntegrationTest {
                 URI.create("http://localhost:" + port + statsVnums)).GET().build(),
                 HttpResponse.BodyHandlers.ofString());
         assertThat(statsResp.statusCode()).isEqualTo(400);
+    }
+
+    @Test
+    void deduplicatesRepeatShopObservationsInSameScanRun() throws Exception {
+        HttpClient http = HttpClient.newHttpClient();
+
+        // One scan run where shop VID 555 is observed twice (older at 10:00, newer at 10:05)
+        importPayload(http, """
+                {
+                  "sourceId": "dedup-test",
+                  "batchId": "dedup-batch-1",
+                  "runs": [
+                    {
+                      "runId": "dedup-run-1",
+                      "startedAt": "2026-09-14T10:00:00Z",
+                      "endedAt": "2026-09-14T10:10:00Z",
+                      "state": 3,
+                      "mapId": "map-1",
+                      "channel": 1,
+                      "totalTargets": 10,
+                      "visitedTargets": 2,
+                      "failedTargets": 0,
+                      "publishable": true
+                    }
+                  ],
+                  "observations": [
+                    {
+                      "observationId": "obs-older", "runId": "dedup-run-1", "shopVid": 555, "shopTitle": "Shop Old",
+                      "ownerName": "Owner1", "mapId": "map-1", "channel": 1, "x": 10, "y": 10, "z": 0,
+                      "observedAt": "2026-09-14T10:00:00Z", "itemCount": 1, "contentFingerprint": "fp-old",
+                      "listings": [
+                        {"listingId": 1, "slotIndex": 0, "vnum": 500, "itemName": "Item Old", "count": 10, "priceRaw": 1000, "unitPrice": 1000, "tailField": 0, "attributes": [], "sockets": []}
+                      ]
+                    },
+                    {
+                      "observationId": "obs-newer", "runId": "dedup-run-1", "shopVid": 555, "shopTitle": "Shop New",
+                      "ownerName": "Owner1", "mapId": "map-1", "channel": 1, "x": 10, "y": 10, "z": 0,
+                      "observedAt": "2026-09-14T10:05:00Z", "itemCount": 2, "contentFingerprint": "fp-new",
+                      "listings": [
+                        {"listingId": 2, "slotIndex": 0, "vnum": 500, "itemName": "Item New", "count": 3, "priceRaw": 700, "unitPrice": 700, "tailField": 0, "attributes": [], "sockets": []},
+                        {"listingId": 3, "slotIndex": 1, "vnum": 500, "itemName": "Item New", "count": 2, "priceRaw": 800, "unitPrice": 800, "tailField": 0, "attributes": [], "sockets": []}
+                      ]
+                    },
+                    {
+                      "observationId": "obs-other-shop", "runId": "dedup-run-1", "shopVid": 666, "shopTitle": "Shop Other",
+                      "ownerName": "Owner2", "mapId": "map-1", "channel": 1, "x": 20, "y": 20, "z": 0,
+                      "observedAt": "2026-09-14T10:06:00Z", "itemCount": 1, "contentFingerprint": "fp-other",
+                      "listings": [
+                        {"listingId": 4, "slotIndex": 0, "vnum": 500, "itemName": "Item New", "count": 5, "priceRaw": 900, "unitPrice": 900, "tailField": 0, "attributes": [], "sockets": []}
+                      ]
+                    }
+                  ]
+                }
+                """);
+
+        // Search returns only from canonical observations: Shop 555 has 2 listings, Shop 666 has 1 listing -> total 3
+        JsonNode search = getJson(http, "/api/v1/items?vnum=500&size=20");
+        assertThat(search.path("totalElements").asLong()).isEqualTo(3);
+
+        // Statistics reflects exactly 2 unique contributing shops (Shop 555 and Shop 666)
+        JsonNode stats = getJson(http, "/api/v1/items/statistics?vnum=500").path("items").get(0);
+        assertThat(stats.path("contributingShopCount").asLong()).isEqualTo(2);
+        // Shop 555 has 2 listings (700 and 800), Shop 666 has 1 listing (900) -> total 3 listings
+        assertThat(stats.path("rawOfferCount").asLong()).isEqualTo(3);
+        // Total quantity: Shop 555 has 3+2=5, Shop 666 has 5 -> total 10 (not including old 10 units)
+        assertThat(stats.path("totalQuantity").asLong()).isEqualTo(10);
+        // Minimum price is 700 (from newer observation)
+        assertThat(stats.path("minimumPrice").asLong()).isEqualTo(700);
+        // Shop-level distribution: Shop 555 min=700, Shop 666 min=900
+        // Mean = (700 + 900) / 2 = 800
+        assertThat(stats.path("meanPrice").decimalValue()).isEqualByComparingTo("800");
+        // Discrete P50 = 700 (ceil(2 * 0.5) = 1 -> index 0)
+        assertThat(stats.path("medianPrice").decimalValue()).isEqualByComparingTo("700");
+
+        // Buyer reference (P20 = 700)
+        assertThat(stats.path("buyerReference").path("price").asLong()).isEqualTo(700);
+        assertThat(stats.path("buyerReference").path("shopsAtOrBelow").asLong()).isEqualTo(1);
+        // Quantity at or below 700: only the 700 listing (qty=3), not the 800 or 900
+        assertThat(stats.path("buyerReference").path("quantityAtOrBelow").asLong()).isEqualTo(3);
+    }
+
+    @Test
+    void supportsNullShopVidFallbackAndExtendedStatisticsPayload() throws Exception {
+        HttpClient http = HttpClient.newHttpClient();
+
+        importPayload(http, """
+                {
+                  "sourceId": "null-vid-test",
+                  "batchId": "null-vid-batch-1",
+                  "runs": [
+                    {
+                      "runId": "null-vid-run-1",
+                      "startedAt": "2026-09-15T10:00:00Z",
+                      "endedAt": "2026-09-15T10:10:00Z",
+                      "state": 3,
+                      "mapId": "map-1",
+                      "channel": 1,
+                      "totalTargets": 10,
+                      "visitedTargets": 2,
+                      "failedTargets": 0,
+                      "publishable": true
+                    }
+                  ],
+                  "observations": [
+                    {
+                      "observationId": "obs-null-1", "runId": "null-vid-run-1", "shopVid": null, "shopTitle": "Shop Null 1",
+                      "ownerName": "Owner1", "mapId": "map-1", "channel": 1, "x": 10, "y": 10, "z": 0,
+                      "observedAt": "2026-09-15T10:01:00Z", "itemCount": 1, "contentFingerprint": "fp-null-1",
+                      "listings": [
+                        {"listingId": 1, "slotIndex": 0, "vnum": 888, "itemName": "Bialy Kamien", "count": 2, "priceRaw": 100, "unitPrice": 100, "tailField": 0, "attributes": [], "sockets": []}
+                      ]
+                    },
+                    {
+                      "observationId": "obs-null-2", "runId": "null-vid-run-1", "shopVid": null, "shopTitle": "Shop Null 2",
+                      "ownerName": "Owner2", "mapId": "map-1", "channel": 1, "x": 20, "y": 20, "z": 0,
+                      "observedAt": "2026-09-15T10:02:00Z", "itemCount": 1, "contentFingerprint": "fp-null-2",
+                      "listings": [
+                        {"listingId": 1, "slotIndex": 0, "vnum": 888, "itemName": "Bialy Kamien", "count": 3, "priceRaw": 200, "unitPrice": 200, "tailField": 0, "attributes": [], "sockets": []}
+                      ]
+                    }
+                  ]
+                }
+                """);
+
+        JsonNode stats = getJson(http, "/api/v1/items/statistics?vnum=888").path("items").get(0);
+        assertThat(stats.path("vnum").asInt()).isEqualTo(888);
+        assertThat(stats.path("itemName").asText()).isEqualTo("Bialy Kamien");
+        assertThat(stats.path("contributingShopCount").asLong()).isEqualTo(2);
+        assertThat(stats.path("minimumPrice").asLong()).isEqualTo(100);
+        assertThat(stats.path("percentiles").path("p10").asLong()).isEqualTo(100);
+        assertThat(stats.path("percentiles").path("p90").asLong()).isEqualTo(200);
+        assertThat(stats.path("iqr").asLong()).isEqualTo(100);
+        assertThat(stats.path("outliers").path("totalCount").asLong()).isEqualTo(0);
+        assertThat(stats.path("depth")).hasSize(2);
+        assertThat(stats.path("histogram")).isNotEmpty();
     }
 
     private JsonNode importPayload(HttpClient http, String payload) throws Exception {

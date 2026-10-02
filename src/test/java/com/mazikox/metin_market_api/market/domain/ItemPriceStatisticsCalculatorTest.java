@@ -31,6 +31,7 @@ class ItemPriceStatisticsCalculatorTest {
         assertThat(stats.contributingShopCount()).isEqualTo(1);
         assertThat(stats.rawOfferCount()).isEqualTo(1);
         assertThat(stats.totalQuantity()).isEqualTo(5);
+        assertThat(stats.totalPriceLevelCount()).isEqualTo(1);
 
         // Percentiles for n=1: all percentiles point to index 0
         assertThat(stats.percentiles().p10()).isEqualTo(1000L);
@@ -79,6 +80,7 @@ class ItemPriceStatisticsCalculatorTest {
         assertThat(stats.contributingShopCount()).isEqualTo(1);
         assertThat(stats.rawOfferCount()).isEqualTo(3);
         assertThat(stats.totalQuantity()).isEqualTo(20);
+        assertThat(stats.totalPriceLevelCount()).isEqualTo(3);
         assertThat(stats.minimumPrice()).isEqualTo(800_000L);
         assertThat(stats.medianPrice()).isEqualByComparingTo("800000");
 
@@ -107,7 +109,7 @@ class ItemPriceStatisticsCalculatorTest {
     }
 
     @Test
-    @DisplayName("Two shops calculate correct discrete percentiles, mean and trimmed mean")
+    @DisplayName("Two shops calculate correct discrete percentiles, classical median and trimmed mean")
     void twoShops() {
         List<RawListing> listings = List.of(
                 new RawListing(100, "Miecz", 100L, 1, "shop-1"),
@@ -118,6 +120,7 @@ class ItemPriceStatisticsCalculatorTest {
 
         assertThat(stats).isNotNull();
         assertThat(stats.contributingShopCount()).isEqualTo(2);
+        assertThat(stats.totalPriceLevelCount()).isEqualTo(2);
         assertThat(stats.minimumPrice()).isEqualTo(100L);
         assertThat(stats.meanPrice()).isEqualByComparingTo("150");
         assertThat(stats.trimmedMeanPrice()).isEqualByComparingTo("150");
@@ -132,10 +135,50 @@ class ItemPriceStatisticsCalculatorTest {
         assertThat(stats.percentiles().p10()).isEqualTo(100L);
         assertThat(stats.percentiles().p20()).isEqualTo(100L);
         assertThat(stats.percentiles().p25()).isEqualTo(100L);
-        assertThat(stats.percentiles().p50()).isEqualTo(100L);
+        assertThat(stats.percentiles().p50()).isEqualTo(100L); // Discrete P50
         assertThat(stats.percentiles().p75()).isEqualTo(200L);
         assertThat(stats.percentiles().p90()).isEqualTo(200L);
-        assertThat(stats.medianPrice()).isEqualByComparingTo("100");
+
+        // Classical median is (100 + 200) / 2 = 150
+        assertThat(stats.medianPrice()).isEqualByComparingTo("150");
+    }
+
+    @Test
+    @DisplayName("Four shops distinguish classical median from discrete P50")
+    void fourShopsClassicalMedianVsDiscreteP50() {
+        List<RawListing> listings = List.of(
+                new RawListing(100, "Miecz", 100L, 1, "shop-1"),
+                new RawListing(100, "Miecz", 200L, 1, "shop-2"),
+                new RawListing(100, "Miecz", 300L, 1, "shop-3"),
+                new RawListing(100, "Miecz", 400L, 1, "shop-4")
+        );
+
+        ItemPriceStatistics stats = ItemPriceStatisticsCalculator.calculate(100, listings);
+
+        assertThat(stats).isNotNull();
+        assertThat(stats.contributingShopCount()).isEqualTo(4);
+
+        // Discrete P50: ceil(4 * 0.5) = 2 -> index 1 -> 200
+        assertThat(stats.percentiles().p50()).isEqualTo(200L);
+
+        // Classical median: (200 + 300) / 2 = 250
+        assertThat(stats.medianPrice()).isEqualByComparingTo("250");
+    }
+
+    @Test
+    @DisplayName("Odd number of shops has identical classical median and discrete P50")
+    void oddShopsMedian() {
+        List<RawListing> listings = List.of(
+                new RawListing(100, "Miecz", 100L, 1, "shop-1"),
+                new RawListing(100, "Miecz", 200L, 1, "shop-2"),
+                new RawListing(100, "Miecz", 300L, 1, "shop-3")
+        );
+
+        ItemPriceStatistics stats = ItemPriceStatisticsCalculator.calculate(100, listings);
+
+        assertThat(stats).isNotNull();
+        assertThat(stats.percentiles().p50()).isEqualTo(200L);
+        assertThat(stats.medianPrice()).isEqualByComparingTo("200");
     }
 
     @Test
@@ -162,6 +205,47 @@ class ItemPriceStatisticsCalculatorTest {
         assertThat(stats.percentiles().p20()).isEqualTo(818_000L);
         assertThat(stats.buyerReference().price()).isEqualTo(818_000L);
         assertThat(stats.buyerReference().shopsAtOrBelow()).isEqualTo(10);
+    }
+
+    @Test
+    @DisplayName("More than 100 unique price levels preserves total count and buckets depth to 100 with exact totalQuantity")
+    void moreThan100PriceLevelsBucketing() {
+        // 150 shops with 150 distinct prices
+        List<RawListing> listings = new ArrayList<>();
+        long expectedTotalQuantity = 0;
+        for (int i = 1; i <= 150; i++) {
+            long price = 1000L * i;
+            int qty = i % 5 + 1;
+            expectedTotalQuantity += qty;
+            listings.add(new RawListing(500, "Przedmiot 500", price, qty, "shop-" + i));
+        }
+
+        ItemPriceStatistics stats = ItemPriceStatisticsCalculator.calculate(500, listings);
+
+        assertThat(stats).isNotNull();
+        assertThat(stats.contributingShopCount()).isEqualTo(150);
+        assertThat(stats.totalQuantity()).isEqualTo(expectedTotalQuantity);
+        assertThat(stats.totalPriceLevelCount()).isEqualTo(150);
+
+        // Depth must be bucketed to exactly 100 points
+        List<DepthPoint> depth = stats.depth();
+        assertThat(depth).hasSize(100);
+
+        // The final depth point MUST cover the entire supply
+        DepthPoint lastPoint = depth.getLast();
+        assertThat(lastPoint.price()).isEqualTo(150_000L);
+        assertThat(lastPoint.cumulativeQuantity()).isEqualTo(expectedTotalQuantity);
+        assertThat(lastPoint.cumulativeShopCount()).isEqualTo(150);
+
+        // Sum of quantityAtPrice across all 100 bucketed points equals expectedTotalQuantity
+        long sumQtyAtPrice = depth.stream().mapToLong(DepthPoint::quantityAtPrice).sum();
+        assertThat(sumQtyAtPrice).isEqualTo(expectedTotalQuantity);
+
+        // Prices must be strictly monotonic ascending
+        for (int i = 0; i < depth.size() - 1; i++) {
+            assertThat(depth.get(i).price()).isLessThan(depth.get(i + 1).price());
+            assertThat(depth.get(i).cumulativeQuantity()).isLessThanOrEqualTo(depth.get(i + 1).cumulativeQuantity());
+        }
     }
 
     @Test
@@ -231,6 +315,7 @@ class ItemPriceStatisticsCalculatorTest {
         assertThat(stats).isNotNull();
         assertThat(stats.contributingShopCount()).isEqualTo(10);
         assertThat(stats.totalQuantity()).isEqualTo(25); // 5*2 + 5*3 = 10 + 15 = 25
+        assertThat(stats.totalPriceLevelCount()).isEqualTo(2);
 
         // P20: ceil(10 * 0.20) = 2 -> index 1 -> price 100
         assertThat(stats.percentiles().p20()).isEqualTo(100L);

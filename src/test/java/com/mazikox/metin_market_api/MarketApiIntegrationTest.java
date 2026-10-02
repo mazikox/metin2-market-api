@@ -457,7 +457,8 @@ class MarketApiIntegrationTest {
         JsonNode stats3000 = getJson(http, "/api/v1/items/statistics?vnum=3000").path("items").get(0);
         assertThat(stats3000.path("minimumPrice").asLong()).isEqualTo(5000);
         assertThat(stats3000.path("meanPrice").decimalValue()).isEqualByComparingTo("5500");
-        assertThat(stats3000.path("medianPrice").decimalValue()).isEqualByComparingTo("5000");
+        assertThat(stats3000.path("medianPrice").decimalValue()).isEqualByComparingTo("5500");
+        assertThat(stats3000.path("percentiles").path("p50").asLong()).isEqualTo(5000);
         assertThat(stats3000.path("contributingShopCount").asLong()).isEqualTo(2);
         assertThat(stats3000.path("rawOfferCount").asLong()).isEqualTo(2);
 
@@ -579,8 +580,10 @@ class MarketApiIntegrationTest {
         // Shop-level distribution: Shop 555 min=700, Shop 666 min=900
         // Mean = (700 + 900) / 2 = 800
         assertThat(stats.path("meanPrice").decimalValue()).isEqualByComparingTo("800");
+        // Classical median: (700 + 900) / 2 = 800
+        assertThat(stats.path("medianPrice").decimalValue()).isEqualByComparingTo("800");
         // Discrete P50 = 700 (ceil(2 * 0.5) = 1 -> index 0)
-        assertThat(stats.path("medianPrice").decimalValue()).isEqualByComparingTo("700");
+        assertThat(stats.path("percentiles").path("p50").asLong()).isEqualTo(700);
 
         // Buyer reference (P20 = 700)
         assertThat(stats.path("buyerReference").path("price").asLong()).isEqualTo(700);

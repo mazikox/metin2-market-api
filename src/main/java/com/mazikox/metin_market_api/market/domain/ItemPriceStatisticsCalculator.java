@@ -30,6 +30,11 @@ public final class ItemPriceStatisticsCalculator {
             long totalQuantity
     ) {}
 
+    private record DepthAggregationResult(
+            long totalPriceLevelCount,
+            List<DepthPoint> depthPoints
+    ) {}
+
     private ItemPriceStatisticsCalculator() {}
 
     public static ItemPriceStatistics calculate(int vnum, List<RawListing> listings) {
@@ -78,10 +83,10 @@ public final class ItemPriceStatisticsCalculator {
         long p90 = discretePercentile(shopPrices, 0.90);
         PricePercentiles percentiles = new PricePercentiles(p10, p20, p25, p50, p75, p90);
 
-        // 3. Means & Median
+        // 3. Means & Median (classical median for medianPrice, discrete for percentiles.p50)
         BigDecimal meanPrice = calculateMean(shopPrices);
         BigDecimal trimmedMeanPrice = calculateTrimmedMean(shopPrices, 0.10);
-        BigDecimal medianPrice = BigDecimal.valueOf(p50);
+        BigDecimal medianPrice = calculateClassicalMedian(shopPrices);
 
         // 4. IQR & Outliers
         long iqr = p75 - p25;
@@ -117,7 +122,9 @@ public final class ItemPriceStatisticsCalculator {
         BuyerReference buyerReference = new BuyerReference(20, buyerPrice, shopsAtOrBelow, quantityAtOrBelow);
 
         // 6. Market Depth
-        List<DepthPoint> depth = calculateMarketDepth(listings, shopPrices);
+        DepthAggregationResult depthResult = calculateMarketDepth(listings, shopPrices);
+        long totalPriceLevelCount = depthResult.totalPriceLevelCount();
+        List<DepthPoint> depth = depthResult.depthPoints();
 
         // 7. Histogram
         List<HistogramBin> histogram = calculateHistogram(shopPrices, lowerFence, upperFence);
@@ -135,6 +142,7 @@ public final class ItemPriceStatisticsCalculator {
                 contributingShopCount,
                 rawOfferCount,
                 totalQuantity,
+                totalPriceLevelCount,
                 outliers,
                 buyerReference,
                 histogram,
@@ -150,6 +158,19 @@ public final class ItemPriceStatisticsCalculator {
         int rank = (int) Math.ceil(n * percentile);
         int index = Math.max(0, Math.min(n - 1, rank - 1));
         return sortedPrices.get(index);
+    }
+
+    private static BigDecimal calculateClassicalMedian(List<Long> sortedPrices) {
+        if (sortedPrices.isEmpty()) {
+            return BigDecimal.ZERO;
+        }
+        int n = sortedPrices.size();
+        if (n % 2 == 1) {
+            return BigDecimal.valueOf(sortedPrices.get(n / 2));
+        }
+        long mid1 = sortedPrices.get(n / 2 - 1);
+        long mid2 = sortedPrices.get(n / 2);
+        return BigDecimal.valueOf(mid1).add(BigDecimal.valueOf(mid2)).divide(BigDecimal.valueOf(2), MathContext.DECIMAL128);
     }
 
     private static BigDecimal calculateMean(List<Long> prices) {
@@ -181,7 +202,7 @@ public final class ItemPriceStatisticsCalculator {
         return new BigDecimal(sum).divide(BigDecimal.valueOf(count), MathContext.DECIMAL128);
     }
 
-    private static List<DepthPoint> calculateMarketDepth(List<RawListing> listings, List<Long> sortedShopCheapestPrices) {
+    private static DepthAggregationResult calculateMarketDepth(List<RawListing> listings, List<Long> sortedShopCheapestPrices) {
         // Group all listings by unit_price
         Map<Long, List<RawListing>> byPrice = new LinkedHashMap<>();
         List<RawListing> sortedListings = new ArrayList<>(listings);
@@ -191,35 +212,71 @@ public final class ItemPriceStatisticsCalculator {
             byPrice.computeIfAbsent(listing.unitPrice(), ignored -> new ArrayList<>()).add(listing);
         }
 
-        List<DepthPoint> depthPoints = new ArrayList<>(byPrice.size());
+        long totalPriceLevelCount = byPrice.size();
+        List<Map.Entry<Long, List<RawListing>>> priceEntries = new ArrayList<>(byPrice.entrySet());
+
+        if (priceEntries.isEmpty()) {
+            return new DepthAggregationResult(0, List.of());
+        }
+
+        if (priceEntries.size() <= 100) {
+            List<DepthPoint> depthPoints = new ArrayList<>(priceEntries.size());
+            long cumulativeQty = 0;
+            for (Map.Entry<Long, List<RawListing>> entry : priceEntries) {
+                long price = entry.getKey();
+                List<RawListing> atPrice = entry.getValue();
+                long qtyAtPrice = atPrice.stream().mapToLong(RawListing::quantity).sum();
+                long shopCountAtPrice = atPrice.stream().map(RawListing::shopKey).distinct().count();
+                cumulativeQty += qtyAtPrice;
+                long cumulativeShopCount = sortedShopCheapestPrices.stream().filter(p -> p <= price).count();
+                depthPoints.add(new DepthPoint(
+                        price,
+                        qtyAtPrice,
+                        cumulativeQty,
+                        shopCountAtPrice,
+                        cumulativeShopCount
+                ));
+            }
+            return new DepthAggregationResult(totalPriceLevelCount, depthPoints);
+        }
+
+        // More than 100 unique price levels -> bucket deterministically into 100 points
+        int targetBuckets = 100;
+        int m = priceEntries.size();
+        List<DepthPoint> depthPoints = new ArrayList<>(targetBuckets);
         long cumulativeQty = 0;
 
-        for (Map.Entry<Long, List<RawListing>> entry : byPrice.entrySet()) {
-            long price = entry.getKey();
-            List<RawListing> atPrice = entry.getValue();
+        for (int b = 0; b < targetBuckets; b++) {
+            int startIdx = (b * m) / targetBuckets;
+            int endIdx = ((b + 1) * m) / targetBuckets;
 
-            long qtyAtPrice = atPrice.stream().mapToLong(RawListing::quantity).sum();
-            long shopCountAtPrice = atPrice.stream().map(RawListing::shopKey).distinct().count();
+            List<Map.Entry<Long, List<RawListing>>> bucketEntries = priceEntries.subList(startIdx, endIdx);
+            long bucketMaxPrice = bucketEntries.getLast().getKey();
 
-            cumulativeQty += qtyAtPrice;
+            long bucketQty = 0;
+            Set<String> bucketShops = new TreeSet<>();
+            for (Map.Entry<Long, List<RawListing>> entry : bucketEntries) {
+                for (RawListing raw : entry.getValue()) {
+                    bucketQty += raw.quantity();
+                    if (raw.shopKey() != null) {
+                        bucketShops.add(raw.shopKey());
+                    }
+                }
+            }
 
-            // Cumulative shops offering at or below this price
-            long cumulativeShopCount = sortedShopCheapestPrices.stream().filter(p -> p <= price).count();
+            cumulativeQty += bucketQty;
+            long cumulativeShopCount = sortedShopCheapestPrices.stream().filter(p -> p <= bucketMaxPrice).count();
 
             depthPoints.add(new DepthPoint(
-                    price,
-                    qtyAtPrice,
+                    bucketMaxPrice,
+                    bucketQty,
                     cumulativeQty,
-                    shopCountAtPrice,
+                    bucketShops.size(),
                     cumulativeShopCount
             ));
         }
 
-        // Limit depth points to 100 if excessive
-        if (depthPoints.size() > 100) {
-            return depthPoints.subList(0, 100);
-        }
-        return depthPoints;
+        return new DepthAggregationResult(totalPriceLevelCount, depthPoints);
     }
 
     private static List<HistogramBin> calculateHistogram(

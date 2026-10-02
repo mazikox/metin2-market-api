@@ -16,6 +16,7 @@ public record ItemPriceStatistics(
         long contributingShopCount,
         long rawOfferCount,
         long totalQuantity,
+        long totalPriceLevelCount,
         OutlierSummary outliers,
         BuyerReference buyerReference,
         List<HistogramBin> histogram,

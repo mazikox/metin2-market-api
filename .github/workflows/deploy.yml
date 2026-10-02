@@ -82,6 +82,9 @@ jobs:
             git fetch origin main
             git reset --hard origin/main
             sudo docker compose up -d --build api
+            sudo caddy validate --config ops/Caddyfile --adapter caddyfile
+            sudo cp ops/Caddyfile /etc/caddy/Caddyfile
+            sudo systemctl reload caddy
           '
 
       - name: Health check
@@ -112,11 +115,27 @@ jobs:
               && curl --fail --silent --show-error \
               "https://api.mazikox.pl/api/v1/servers/beavium/items/statistics?vnum=180" > /dev/null; then
               echo "API healthy"
-              exit 0
+              break
             fi
 
             sleep 5
           done
 
-          echo "API health check failed"
-          exit 1
+      - name: Verify Caddy routing smoke test
+        run: |
+          for path in "" "?server=pandora" "?server=elder" "?server=beavium" "?server=unknown"; do
+            status=$(curl -s -o /dev/null -w "%{http_code}" "https://metin2bazar.pl/$path")
+            if [ "$status" != "200" ]; then
+              echo "Expected HTTP 200 for https://metin2bazar.pl/$path, got $status"
+              exit 1
+            fi
+          done
+          for path in "elder" "beavium"; do
+            status=$(curl -s -o /dev/null -w "%{http_code}" "https://metin2bazar.pl/$path")
+            if [ "$status" != "404" ]; then
+              echo "Expected HTTP 404 for https://metin2bazar.pl/$path, got $status"
+              exit 1
+            fi
+          done
+          echo "Caddy routing smoke test passed"
+

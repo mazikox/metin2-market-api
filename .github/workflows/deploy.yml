@@ -115,15 +115,18 @@ jobs:
               && curl --fail --silent --show-error \
               "https://api.mazikox.pl/api/v1/servers/beavium/items/statistics?vnum=180" > /dev/null; then
               echo "API healthy"
-              break
+              exit 0
             fi
 
             sleep 5
           done
 
+          echo "API health check failed after 12 attempts"
+          exit 1
+
       - name: Verify Caddy routing smoke test
         run: |
-          for path in "" "?server=pandora" "?server=elder" "?server=beavium" "?server=unknown"; do
+          for path in "" "?server=pandora" "?server=elder" "?server=beavium" "?server=unknown" "?server=pandora&server=elder" "?server=elder&server=pandora" "?server=unknown&server=pandora" "?server=&server=elder" "?server=beavium&server=unknown"; do
             status=$(curl -s -o /dev/null -w "%{http_code}" "https://metin2bazar.pl/$path")
             if [ "$status" != "200" ]; then
               echo "Expected HTTP 200 for https://metin2bazar.pl/$path, got $status"

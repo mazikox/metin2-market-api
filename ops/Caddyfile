@@ -41,15 +41,15 @@
 
     @pandora_market {
         path / /index.html
-        query server=pandora
+        expression `{http.request.uri.query.server} == 'pandora' || {http.request.uri.query.server}.startsWith('pandora,')`
     }
     @elder_market {
         path / /index.html
-        query server=elder
+        expression `{http.request.uri.query.server} == 'elder' || {http.request.uri.query.server}.startsWith('elder,')`
     }
     @beavium_market {
         path / /index.html
-        query server=beavium
+        expression `{http.request.uri.query.server} == 'beavium' || {http.request.uri.query.server}.startsWith('beavium,')`
     }
     rewrite @pandora_market /server-pandora.html
     rewrite @elder_market /server-elder.html

@@ -48,5 +48,7 @@ jobs:
           SCANNER_TOKEN: test_scanner_token_456
           SCANNER_TOKEN_ELDER: test_scanner_token_elder_789
           SCANNER_TOKEN_BEAVIUM: test_scanner_token_beavium_012
+          ANALYTICS_SECRET: test_analytics_secret_12345678901234567890
+          ANALYTICS_PROXY_TOKEN: test_analytics_proxy_token_12345678901234567890
         run: |
           docker compose config

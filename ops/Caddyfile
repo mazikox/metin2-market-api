@@ -39,6 +39,22 @@
         }
     }
 
+    @pandora_market {
+        path / /index.html
+        query server=pandora
+    }
+    @elder_market {
+        path / /index.html
+        query server=elder
+    }
+    @beavium_market {
+        path / /index.html
+        query server=beavium
+    }
+    rewrite @pandora_market /server-pandora.html
+    rewrite @elder_market /server-elder.html
+    rewrite @beavium_market /server-beavium.html
+
     handle {
         file_server
     }

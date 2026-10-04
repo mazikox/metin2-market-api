@@ -136,7 +136,7 @@ public final class ItemBonusCatalog {
     }
 
     public static Details describe(GameServer server, int type, int value) {
-        if (server == GameServer.PANDORA || server == GameServer.BEAVIUM || server == GameServer.ELDER) {
+        if (server == GameServer.PANDORA || server == GameServer.BEAVIUM) {
             return describe(type, value);
         }
         return new Details("UNKNOWN", "Nieznany bonus", signed(value));

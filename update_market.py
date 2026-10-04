@@ -30,7 +30,16 @@ from tools.import_sqlite import (
     post_batch,
 )
 
-DEFAULT_ELDERSUITE_DB = Path(os.environ.get("LOCALAPPDATA", "")) / "ElderSuite" / "eldersuite-history-pandora.db"
+DEFAULT_ELDERSUITE_DBS = {
+    "pandora": Path(os.environ.get("LOCALAPPDATA", "")) / "ElderSuite" / "eldersuite-history-pandora.db",
+    "elder": Path(os.environ.get("LOCALAPPDATA", "")) / "ElderSuite" / "eldersuite-history-elder.db",
+    "beavium": Path(os.environ.get("LOCALAPPDATA", "")) / "ElderSuite" / "eldersuite-history-beavium.db",
+}
+DEFAULT_SOURCE_IDS = {
+    "pandora": DEFAULT_SOURCE_ID,
+    "elder": "eldersuite-elder-main",
+    "beavium": "eldersuite-beavium-main",
+}
 DEFAULT_PROD_API_URL = "https://api.mazikox.pl"
 
 
@@ -42,7 +51,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--database",
         type=Path,
-        help="Path to the server's ElderSuite SQLite database (defaults to the existing Pandora database)",
+        help="Path to the server's ElderSuite SQLite database (defaults to the selected server DB in %LOCALAPPDATA%\\ElderSuite)",
     )
     parser.add_argument(
         "--api-url",
@@ -57,7 +66,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--source-id",
-        help="Source identifier (defaults to the existing Pandora source)",
+        help="Source identifier (defaults to eldersuite-<server>-main)",
     )
     parser.add_argument(
         "--dry-run",
@@ -81,15 +90,12 @@ def describe_state(state: int) -> str:
 def main() -> int:
     args = parse_args()
 
-    if args.server == "pandora":
-        database = args.database or DEFAULT_ELDERSUITE_DB
-        source_id = args.source_id or DEFAULT_SOURCE_ID
-    else:
-        if args.database is None or not args.source_id:
-            print("BŁĄD: Dla Eldera i Beavium podaj --database oraz --source-id.", file=sys.stderr)
-            return 2
-        database = args.database
-        source_id = args.source_id
+    database = args.database or DEFAULT_ELDERSUITE_DBS.get(args.server)
+    source_id = args.source_id or DEFAULT_SOURCE_IDS.get(args.server)
+
+    if not database or not source_id:
+        print(f"BŁĄD: Brak konfiguracji domyślnej dla serwera: {args.server}", file=sys.stderr)
+        return 2
 
     if not database.is_file():
         print(f"BŁĄD: Plik bazy danych SQLite nie istnieje:\n  {database}", file=sys.stderr)

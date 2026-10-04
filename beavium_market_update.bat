@@ -1,16 +1,16 @@
 @echo off
 setlocal DisableDelayedExpansion
-title Pandora Market Updater
+title Beavium Market Updater
 cd /d E:\metin-market-api
 
 :menu
 cls
 echo ==========================================
-echo        PANDORA MARKET - UPDATE MENU
+echo        BEAVIUM MARKET - UPDATE MENU
 echo ==========================================
 echo.
-echo [1] Pobierz SCANNER_TOKEN z VPS przez SSH
-echo [2] Uruchom update_market.py
+echo [1] Pobierz SCANNER_TOKEN_BEAVIUM z VPS przez SSH
+echo [2] Uruchom update_market.py dla Beavium
 echo [0] Wyjdz
 echo.
 choice /c 120 /n /m "Wybierz opcje: "
@@ -24,12 +24,12 @@ cls
 echo Pobieranie tokena z VPS...
 echo Zostaniesz poproszony o haslo SSH.
 echo.
-set "SCANNER_TOKEN="
+set "SCANNER_TOKEN_BEAVIUM="
 
-for /f "usebackq delims=" %%T in (`ssh -i "%USERPROFILE%\.ssh\mazikox_github_actions" debian@146.59.63.158 "sed -n 's/^SCANNER_TOKEN=//p' /home/debian/metin2-market-api/.env"`) do set "SCANNER_TOKEN=%%T"
+for /f "usebackq delims=" %%T in (`ssh -i "%USERPROFILE%\.ssh\mazikox_github_actions" debian@146.59.63.158 "sed -n 's/^SCANNER_TOKEN_BEAVIUM=//p' /home/debian/metin2-market-api/.env"`) do set "SCANNER_TOKEN_BEAVIUM=%%T"
 
 echo.
-if defined SCANNER_TOKEN (
+if defined SCANNER_TOKEN_BEAVIUM (
     echo [OK] Token zostal zaladowany do tej sesji.
     echo Token NIE zostanie wyswietlony ani zapisany do pliku.
 ) else (
@@ -42,17 +42,17 @@ goto :menu
 
 :run
 cls
-if not defined SCANNER_TOKEN (
+if not defined SCANNER_TOKEN_BEAVIUM (
     echo [BLAD] Token nie jest zaladowany.
-    echo Najpierw wybierz opcje 1.
+    echo Najpierw wybierz opcje 1 lub ustaw zmienna SCANNER_TOKEN_BEAVIUM.
     echo.
     pause
     goto :menu
 )
 
-echo Uruchamiam update_market.py...
+echo Uruchamiam update_market.py dla Beavium...
 echo.
-python .\update_market.py
+python .\update_market.py --server beavium
 
 echo.
 echo Skrypt zakonczyl dzialanie.

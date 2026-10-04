@@ -260,7 +260,7 @@ def read_run_data(
         connection.close()
 
 
-def post_batch(api_url: str, token: str, payload: dict, server: str = "pandora") -> dict:
+def post_batch(api_url: str, token: str, payload: dict, server: str = "pandora", retries: int = 3) -> dict:
     if server not in SERVERS:
         raise ValueError(f"Unsupported game server: {server}")
     if server == "pandora":
@@ -269,22 +269,28 @@ def post_batch(api_url: str, token: str, payload: dict, server: str = "pandora")
         endpoint_path = f"/internal/v1/servers/{server}/imports"
     endpoint = api_url.rstrip("/") + endpoint_path
     body = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
-    request = Request(
-        endpoint,
-        data=body,
-        method="POST",
-        headers={"Content-Type": "application/json", "X-Scanner-Token": token},
-    )
-    try:
-        with urlopen(request, timeout=60) as response:
-            return json.loads(response.read().decode("utf-8"))
-    except HTTPError as error:
-        response_body = error.read().decode("utf-8", errors="replace")
-        raise RuntimeError(
-            f"HTTP batch failed with status {error.code} at {endpoint}: {response_body}"
-        ) from error
-    except URLError as error:
-        raise RuntimeError(f"Cannot reach ingestion API at {endpoint}: {error.reason}") from error
+
+    for attempt in range(1, retries + 1):
+        request = Request(
+            endpoint,
+            data=body,
+            method="POST",
+            headers={"Content-Type": "application/json", "X-Scanner-Token": token},
+        )
+        try:
+            with urlopen(request, timeout=60) as response:
+                return json.loads(response.read().decode("utf-8"))
+        except HTTPError as error:
+            response_body = error.read().decode("utf-8", errors="replace")
+            raise RuntimeError(
+                f"HTTP batch failed with status {error.code} at {endpoint}: {response_body}"
+            ) from error
+        except (URLError, TimeoutError, OSError) as error:
+            if attempt < retries:
+                import time
+                time.sleep(1.5 * attempt)
+                continue
+            raise RuntimeError(f"Cannot reach ingestion API at {endpoint}: {error}") from error
 
 
 def main() -> int:

@@ -197,6 +197,22 @@ class AnalyticsIntegrationTest {
         assertThat(response.getContentAsString()).doesNotContain("visitor_hash");
         assertThat(response.getContentAsString()).contains("\"today\":\"2026-10-01\"", "\"day\":\"2026-10-01\"");
     }
+    @Test void overviewCountsAResultAndUniqueWithoutClaimingASearchEvenOnRetry() throws Exception {
+        HttpClient http = HttpClient.newHttpClient();
+        var request = HttpRequest.newBuilder(URI.create("http://localhost:" + port
+                + "/api/v1/servers/beavium/items/overview"))
+                .header("User-Agent", "Mozilla/5.0").header("X-Analytics-Proxy-Token", PROXY)
+                .header("X-Analytics-Client-IP", "198.51.100.1")
+                .header("X-Catalog-Request", UUID.randomUUID().toString())
+                .header("X-Catalog-Search", UUID.randomUUID().toString()).GET().build();
+        assertThat(http.send(request, HttpResponse.BodyHandlers.ofString()).statusCode()).isEqualTo(200);
+        assertThat(http.send(request, HttpResponse.BodyHandlers.ofString()).statusCode()).isEqualTo(200);
+        assertThat(sum("uniques", "beavium")).isEqualTo(1);
+        assertThat(sum("results", "beavium")).isEqualTo(1);
+        assertThat(sum("searches", "all")).isZero();
+        assertThat(sum("results", "pandora")).isZero();
+        assertThat(count("daily_items")).isZero();
+    }
     @Test void healthSuggestionsAndPriceStatisticsNeverCountEvenWithEventHeaders() throws Exception {
         HttpClient http = HttpClient.newHttpClient();
         for (String path : List.of("/health", "/api/v1/items/suggestions?query=test", "/api/v1/items/statistics?vnum=1")) {

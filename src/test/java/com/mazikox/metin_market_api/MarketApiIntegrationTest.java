@@ -53,8 +53,180 @@ class MarketApiIntegrationTest {
                          elder.synchronization_batch,
                          beavium.shop_listing_socket, beavium.shop_listing_attribute,
                          beavium.shop_listing, beavium.shop_observation, beavium.scan_run,
-                         beavium.synchronization_batch CASCADE
+                         beavium.synchronization_batch,
+                         pandora.item_definition, elder.item_definition, beavium.item_definition CASCADE
                 """).update());
+    }
+
+    private static final String PROTO_HEADER = "vnum\tname\ttype\tsubtype\tsize\tanti\treq_level\tdef\tmin_atk\tmax_atk\tmin_matk\tmax_matk\tsockets\tapp1_t\tapp1_v\tapp2_t\tapp2_v\tapp3_t\tapp3_v\n";
+
+    private HttpResponse<String> importProto(HttpClient http, String server, String token, String rows) throws Exception {
+        return http.send(HttpRequest.newBuilder(URI.create("http://localhost:" + port
+                        + "/internal/v1/servers/" + server + "/imports/item-proto"))
+                .header("X-Scanner-Token", token)
+                .header("Content-Type", "text/tab-separated-values; charset=utf-8")
+                .POST(HttpRequest.BodyPublishers.ofString(PROTO_HEADER + rows)).build(),
+                HttpResponse.BodyHandlers.ofString());
+    }
+
+    @Test
+    void catalogEnrichesExistingOffersAndImportsAreIsolatedValidatedAndRepeatable() throws Exception {
+        var http = HttpClient.newHttpClient();
+        String body = new ClassPathResource("import-example.json").getContentAsString(StandardCharsets.UTF_8);
+        assertThat(postImport(http, "/internal/v1/servers/beavium/imports", "beavium-test-token", body).statusCode()).isEqualTo(200);
+        String row = "180\tZatruty Miecz+0\t1\t0\t3\t262176\t75\t0\t100\t140\t0\t0\t3\t7\t20\t0\t0\t0\t0\n";
+        assertThat(importProto(http, "beavium", "test-token", row).statusCode()).isEqualTo(401);
+        assertThat(importProto(http, "unknown", "beavium-test-token", row).statusCode()).isEqualTo(404);
+        assertThat(importProto(http, "beavium", "beavium-test-token", row).statusCode()).isEqualTo(200);
+        assertThat(importProto(http, "beavium", "beavium-test-token", row).statusCode()).isEqualTo(200);
+        assertThat(getJson(http, "/api/v1/servers/beavium/items?vnum=180").path("items").get(0).path("metadata").path("requiredLevel").asInt()).isEqualTo(75);
+        assertThat(getJson(http, "/api/v1/servers/beavium/items?vnum=180").path("items").get(0).path("metadata").path("builtInBonuses")).hasSize(1);
+        ServerContext.withServer(GameServer.PANDORA, () -> {
+            assertThat(jdbc.sql("SELECT count(*) FROM beavium.item_definition").query(Long.class).single()).isEqualTo(1);
+            assertThat(jdbc.sql("SELECT count(*) FROM elder.item_definition").query(Long.class).single()).isZero();
+            assertThat(jdbc.sql("SELECT count(*) FROM pandora.item_definition").query(Long.class).single()).isZero();
+            return null;
+        });
+        var baseBonus = getJson(http, "/api/v1/servers/beavium/items?vnum=180")
+                .path("items").get(0).path("metadata").path("builtInBonuses").get(0);
+        assertThat(baseBonus.path("name").asText()).isEqualTo("Szybkość Ataku");
+        assertThat(baseBonus.path("displayValue").asText()).isEqualTo("+20%");
+        // A malformed later row must not update an otherwise valid earlier definition.
+        String revised = row.replace("\t75\t", "\t80\t");
+        assertThat(importProto(http, "beavium", "beavium-test-token", revised + "bad row").statusCode()).isEqualTo(400);
+        assertThat(importProto(http, "beavium", "beavium-test-token", row + row).statusCode()).isEqualTo(400);
+        assertThat(getJson(http, "/api/v1/servers/beavium/items?vnum=180").path("items").get(0).path("metadata").path("requiredLevel").asInt()).isEqualTo(75);
+        // Remove a former base bonus on an update, while leaving scanned attributes intact.
+        assertThat(importProto(http, "beavium", "beavium-test-token", revised.replace("\t7\t20\t", "\t0\t0\t")).statusCode()).isEqualTo(200);
+        var item = getJson(http, "/api/v1/servers/beavium/items?vnum=180").path("items").get(0);
+        assertThat(item.path("metadata").path("requiredLevel").asInt()).isEqualTo(80);
+        assertThat(item.path("metadata").path("builtInBonuses")).isEmpty();
+        assertThat(item.path("attributes")).hasSize(5);
+        // Catalog imports tolerate and report the known arrow range without discarding other items.
+        var arrow = importProto(http, "beavium", "beavium-test-token",
+                "8000\tStrzała\t1\t6\t1\t52\t0\t0\t1\t0\t0\t0\t0\t0\t0\t0\t0\t0\t0\n");
+        assertThat(arrow.statusCode()).isEqualTo(200);
+        assertThat(objectMapper.readTree(arrow.body()).path("unusualAttackRangeVnums").get(0).asInt()).isEqualTo(8000);
+        assertThat(getJson(http, "/api/v1/servers/beavium/items?vnum=180").path("items").get(0).path("metadata").path("requiredLevel").asInt()).isEqualTo(80);
+    }
+
+    @Test
+    void extraBonusFiltersCoverWholeMarketUseAndOnOneOfferAndIgnoreBaseProperties() throws Exception {
+        var http = HttpClient.newHttpClient();
+        String body = new ClassPathResource("import-example.json").getContentAsString(StandardCharsets.UTF_8);
+        assertThat(postImport(http, "/internal/v1/servers/beavium/imports", "beavium-test-token", body).statusCode()).isEqualTo(200);
+        assertThat(importProto(http, "beavium", "beavium-test-token",
+                "180\tZatruty Miecz+0\t1\t0\t3\t262176\t75\t0\t100\t140\t0\t0\t3\t7\t20\t0\t0\t0\t0\n").statusCode()).isEqualTo(200);
+        ServerContext.withServer(GameServer.BEAVIUM, () -> {
+            jdbc.sql("""
+                    INSERT INTO shop_listing (observation_id, source_listing_id, slot_index, item_vnum,
+                        item_name, quantity, price_raw, unit_price)
+                    SELECT id, v.source_id, v.slot, v.vnum, 'Miecz testowy', 1, v.price, v.price
+                    FROM shop_observation CROSS JOIN (VALUES
+                        (2, 1, 181, 10), (3, 2, 182, 20), (4, 3, 183, 30),
+                        (5, 4, 184, 40), (6, 5, 183, 30)) v(source_id, slot, vnum, price)
+                    """).update();
+            jdbc.sql("""
+                    INSERT INTO shop_listing_attribute (listing_id, slot_index, attr_type, attr_value)
+                    SELECT l.id, a.slot, a.type, a.value FROM shop_listing l JOIN (VALUES
+                        (181, 0, 72, 10), (182, 0, 71, -20), (183, 0, 72, 45),
+                        (183, 1, 71, -20), (184, 0, 72, 50), (184, 1, 71, -25)) a(vnum, slot, type, value)
+                        ON a.vnum = l.item_vnum
+                    """).update();
+            return null;
+        });
+        String path = "/api/v1/servers/beavium/items";
+        var page0 = getJson(http, path + "?bonus=72:40&size=1");
+        assertThat(page0.path("totalElements").asInt()).isEqualTo(3);
+        assertThat(page0.path("items").get(0).path("vnum").asInt()).isEqualTo(183);
+        assertThat(page0.path("items").get(0).path("listingCount").asInt()).isEqualTo(2);
+        assertThat(getJson(http, path + "?bonus=72:40&size=1&page=2").path("items").get(0).path("vnum").asInt()).isEqualTo(180);
+        var outOfRange = getJson(http, path + "?bonus=72:40&size=1&page=10");
+        assertThat(outOfRange.path("items")).isEmpty();
+        assertThat(outOfRange.path("totalElements").asInt()).isEqualTo(3);
+        assertThat(getJson(http, path + "?bonus=72:40&sort=priceDesc").path("items").get(0).path("vnum").asInt()).isEqualTo(180);
+        var both = getJson(http, path + "?bonus=72:40&bonus=71:-22");
+        assertThat(both.path("totalElements").asInt()).isEqualTo(1);
+        assertThat(both.path("items").get(0).path("vnum").asInt()).isEqualTo(183);
+        // The two conditions appear on different offers in one shop, never on the same offer.
+        assertThat(getJson(http, path + "?vnum=181&vnum=182&bonus=72&bonus=71").path("totalElements").asInt()).isZero();
+        assertThat(getJson(http, path + "?bonus=71").path("totalElements").asInt()).isEqualTo(4);
+        assertThat(getJson(http, path + "?bonus=71:0").path("totalElements").asInt()).isZero();
+        assertThat(getJson(http, path + "?query=Zatruty&bonus=72:40").path("totalElements").asInt()).isEqualTo(1);
+        assertThat(getJson(http, path + "?vnum=181&bonus=72:40").path("totalElements").asInt()).isZero();
+        // Item 180 has a built-in attack speed bonus, which must not satisfy an extra-bonus filter.
+        assertThat(getJson(http, path + "?bonus=7").path("totalElements").asInt()).isZero();
+        assertThat(getJson(http, "/api/v1/servers/elder/items?bonus=72:40").path("totalElements").asInt()).isZero();
+        var options = getJson(http, path + "/bonus-options");
+        assertThat(options).extracting(o -> o.path("type").asInt()).contains(72, 71).doesNotContain(7);
+        for (var option : options) {
+            if (option.path("type").asInt() == 72) {
+                assertThat(option.path("name").asText()).isEqualTo("Średnie Obrażenia");
+                assertThat(option.path("unit").asText()).isEqualTo("%");
+            }
+        }
+        assertThat(getJson(http, "/api/v1/servers/elder/items/bonus-options")).isEmpty();
+    }
+
+    private String protoRow(int vnum, String name, int type, int subtype, int level) {
+        String[] columns = new String[19];
+        java.util.Arrays.fill(columns, "0");
+        columns[0] = Integer.toString(vnum); columns[1] = name;
+        columns[2] = Integer.toString(type); columns[3] = Integer.toString(subtype);
+        columns[4] = "1"; columns[6] = Integer.toString(level);
+        return String.join("\t", columns) + "\n";
+    }
+
+    @Test
+    void categoryAndLevelFiltersCombineWithBonusesBeforePagingAndExcludeUnknownMetadata() throws Exception {
+        var http = HttpClient.newHttpClient();
+        String body = new ClassPathResource("import-example.json").getContentAsString(StandardCharsets.UTF_8);
+        assertThat(postImport(http, "/internal/v1/servers/beavium/imports", "beavium-test-token", body).statusCode()).isEqualTo(200);
+        assertThat(importProto(http, "beavium", "beavium-test-token",
+                protoRow(180, "Miecz", 1, 0, 75) + protoRow(181, "Naszyjnik A", 2, 5, 30)
+                + protoRow(182, "Naszyjnik B", 2, 5, 75) + protoRow(183, "Bransoleta", 2, 3, 0)
+                + protoRow(8000, "Strzała", 1, 6, 0)).statusCode()).isEqualTo(200);
+        ServerContext.withServer(GameServer.BEAVIUM, () -> {
+            jdbc.sql("""
+                    INSERT INTO shop_listing (observation_id, source_listing_id, slot_index, item_vnum,
+                        item_name, quantity, price_raw, unit_price)
+                    SELECT id, v.source_id, v.slot, v.vnum, v.name, 1, v.price, v.price
+                    FROM shop_observation CROSS JOIN (VALUES
+                        (2, 1, 181, 'Naszyjnik A', 10), (3, 2, 182, 'Naszyjnik B', 20),
+                        (4, 3, 183, 'Bransoleta', 30), (5, 4, 184, 'Bez metadanych', 40),
+                        (6, 5, 8000, 'Strzała', 1)) v(source_id, slot, vnum, name, price)
+                    """).update();
+            jdbc.sql("""
+                    INSERT INTO shop_listing_attribute (listing_id, slot_index, attr_type, attr_value)
+                    SELECT id, 0, 1, CASE item_vnum WHEN 181 THEN 1500 ELSE 500 END
+                    FROM shop_listing WHERE item_vnum IN (181, 182)
+                    """).update();
+            return null;
+        });
+        String path = "/api/v1/servers/beavium/items";
+        var first = getJson(http, path + "?category=necklaces&maxLevel=75&size=1");
+        assertThat(first.path("totalElements").asInt()).isEqualTo(2);
+        assertThat(first.path("items").get(0).path("vnum").asInt()).isEqualTo(181);
+        assertThat(getJson(http, path + "?category=necklaces&maxLevel=75&size=1&page=1").path("items").get(0).path("vnum").asInt()).isEqualTo(182);
+        var missingPage = getJson(http, path + "?category=necklaces&minLevel=30&maxLevel=75&size=1&page=9");
+        assertThat(missingPage.path("totalElements").asInt()).isEqualTo(2);
+        assertThat(missingPage.path("items")).isEmpty();
+        assertThat(getJson(http, path + "?category=necklaces&minLevel=75&maxLevel=75").path("items").get(0).path("vnum").asInt()).isEqualTo(182);
+        var combined = getJson(http, path + "?category=necklaces&maxLevel=75&bonus=1:1000");
+        assertThat(combined.path("totalElements").asInt()).isEqualTo(1);
+        assertThat(combined.path("items").get(0).path("vnum").asInt()).isEqualTo(181);
+        assertThat(getJson(http, path + "?category=necklaces&vnum=180").path("totalElements").asInt()).isZero();
+        assertThat(getJson(http, path + "?category=necklaces&query=Naszyjnik&sort=priceDesc").path("items").get(0).path("vnum").asInt()).isEqualTo(182);
+        assertThat(getJson(http, path + "?category=weapons").path("totalElements").asInt()).isEqualTo(1);
+        assertThat(getJson(http, path + "?category=swords&minLevel=75").path("totalElements").asInt()).isEqualTo(1);
+        assertThat(getJson(http, path + "?maxLevel=0").path("totalElements").asInt()).isEqualTo(2);
+        assertThat(getJson(http, path + "?maxLevel=75").path("totalElements").asInt()).isEqualTo(5);
+        assertThat(getJson(http, path).path("totalElements").asInt()).isEqualTo(6);
+        assertThat(getJson(http, "/api/v1/servers/elder/items?maxLevel=75").path("totalElements").asInt()).isZero();
+        var options = getJson(http, path + "/category-options");
+        assertThat(options.path("available").asBoolean()).isTrue();
+        assertThat(options.path("categories")).extracting(c -> c.path("value").asText()).contains("weapons", "necklaces", "bracelets").doesNotContain("helmets");
+        assertThat(getJson(http, "/api/v1/servers/elder/items/category-options").path("available").asBoolean()).isFalse();
     }
 
     @Test
@@ -184,6 +356,28 @@ class MarketApiIntegrationTest {
                 """);
         assertThat(imported.path("importedObservations").asInt()).isEqualTo(3);
         assertThat(imported.path("importedListings").asInt()).isEqualTo(10);
+
+        JsonNode overview = getJson(http, "/api/v1/items/overview");
+        assertThat(overview.path("observedShopCount").asLong()).isEqualTo(3);
+        assertThat(overview.path("scanEndedAt").asText()).isEqualTo("2026-09-12T10:05:00Z");
+        assertThat(overview.path("items")).extracting(item -> item.path("vnum").asInt())
+                .containsExactly(777, 9000, 9009, 9010);
+        assertThat(overview.path("items").get(0).path("shopCount").asLong()).isEqualTo(3);
+        assertThat(overview.path("items").get(0).path("totalQuantity").asLong()).isEqualTo(4);
+        assertThat(overview.path("items").get(0).path("minimumPrice").asLong()).isEqualTo(30);
+        // Multiple slots and different bonuses in one shop still count as one shop.
+        assertThat(overview.path("items").get(2).path("shopCount").asLong()).isEqualTo(1);
+        assertThat(overview.path("items").get(2).path("totalQuantity").asLong()).isEqualTo(4);
+        assertThat(getJson(http, "/api/v1/items/overview?limit=2").path("items")).hasSize(2);
+        assertThat(getJson(http, "/api/v1/servers/pandora/items/overview")).isEqualTo(overview);
+        // Ranking by units must happen before limiting, across all items in the scan.
+        JsonNode quantityOverview = getJson(http, "/api/v1/items/overview?sort=quantity&limit=2");
+        assertThat(quantityOverview.path("items")).extracting(item -> item.path("vnum").asInt())
+                .containsExactly(777, 9009);
+        assertThat(quantityOverview.path("items").get(1).path("totalQuantity").asLong()).isEqualTo(4);
+        assertThat(quantityOverview.path("items").get(1).path("shopCount").asLong()).isEqualTo(1);
+        assertThat(getJson(http, "/api/v1/servers/pandora/items/overview?sort=quantity&limit=2"))
+                .isEqualTo(quantityOverview);
 
         JsonNode search = getJson(http, "/api/v1/items?vnum=9009&size=20");
         assertThat(search.path("totalElements").asLong()).isEqualTo(3);
@@ -431,6 +625,13 @@ class MarketApiIntegrationTest {
                 }
                 """);
 
+        JsonNode overview = getJson(http, "/api/v1/items/overview");
+        assertThat(overview.path("observedShopCount").asLong()).isEqualTo(3);
+        assertThat(overview.path("items")).extracting(item -> item.path("vnum").asInt())
+                .containsExactly(3000, 1000);
+        assertThat(overview.path("items").get(0).path("shopCount").asLong()).isEqualTo(2);
+        assertThat(overview.path("items").get(0).path("minimumPrice").asLong()).isEqualTo(5000);
+
         // Verify offers in public search reflect strictly Run B (the latest completed full/publishable run)
         JsonNode searchA = getJson(http, "/api/v1/items?query=Stary%20Przedmiot%20A");
         assertThat(searchA.path("totalElements").asLong()).isEqualTo(1);
@@ -564,6 +765,14 @@ class MarketApiIntegrationTest {
                 }
                 """);
 
+        JsonNode overview = getJson(http, "/api/v1/items/overview");
+        assertThat(overview.path("items")).hasSize(1);
+        JsonNode overviewItem = overview.path("items").get(0);
+        assertThat(overviewItem.path("itemName").asText()).isEqualTo("Item New");
+        assertThat(overviewItem.path("shopCount").asLong()).isEqualTo(2);
+        assertThat(overviewItem.path("totalQuantity").asLong()).isEqualTo(10);
+        assertThat(overviewItem.path("minimumPrice").asLong()).isEqualTo(700);
+
         // Search returns only from canonical observations: Shop 555 has 2 listings, Shop 666 has 1 listing -> total 3
         JsonNode search = getJson(http, "/api/v1/items?vnum=500&size=20");
         assertThat(search.path("totalElements").asLong()).isEqualTo(3);
@@ -635,6 +844,11 @@ class MarketApiIntegrationTest {
                 }
                 """);
 
+        JsonNode overview = getJson(http, "/api/v1/items/overview");
+        assertThat(overview.path("observedShopCount").asLong()).isEqualTo(2);
+        assertThat(overview.path("items").get(0).path("shopCount").asLong()).isEqualTo(2);
+        assertThat(overview.path("items").get(0).path("totalQuantity").asLong()).isEqualTo(5);
+
         JsonNode stats = getJson(http, "/api/v1/items/statistics?vnum=888").path("items").get(0);
         assertThat(stats.path("vnum").asInt()).isEqualTo(888);
         assertThat(stats.path("itemName").asText()).isEqualTo("Bialy Kamien");
@@ -646,6 +860,71 @@ class MarketApiIntegrationTest {
         assertThat(stats.path("outliers").path("totalCount").asLong()).isEqualTo(0);
         assertThat(stats.path("depth")).hasSize(2);
         assertThat(stats.path("histogram")).isNotEmpty();
+    }
+
+    @Test
+    void overviewSupportsEmptyMarketsAndKeepsBeaviumIsolated() throws Exception {
+        HttpClient http = HttpClient.newHttpClient();
+        JsonNode empty = getJson(http, "/api/v1/servers/beavium/items/overview");
+        assertThat(empty.path("scanId").isNull()).isTrue();
+        assertThat(empty.path("scanEndedAt").isNull()).isTrue();
+        assertThat(empty.path("observedShopCount").asLong()).isZero();
+        assertThat(empty.path("items")).isEmpty();
+
+        String body = new ClassPathResource("import-example.json").getContentAsString(StandardCharsets.UTF_8);
+        assertThat(postImport(http, "/internal/v1/servers/beavium/imports", "beavium-test-token", body)
+                .statusCode()).isEqualTo(200);
+        JsonNode populated = getJson(http, "/api/v1/servers/beavium/items/overview");
+        assertThat(populated.path("items")).hasSize(1);
+        assertThat(populated.path("items").get(0).path("vnum").asInt()).isEqualTo(180);
+        assertThat(getJson(http, "/api/v1/servers/pandora/items/overview")).isEqualTo(empty);
+        assertThat(getJson(http, "/api/v1/servers/elder/items/overview")).isEqualTo(empty);
+    }
+
+    @Test
+    void sortsAllAggregatedOffersBeforePaginationOnEveryServer() throws Exception {
+        HttpClient http = HttpClient.newHttpClient();
+        String body = """
+                {
+                  "sourceId": "offer-sorting", "batchId": "offer-sorting-batch",
+                  "runs": [{"runId": "sorting-run", "startedAt": "2026-10-04T10:00:00Z",
+                    "endedAt": "2026-10-04T10:05:00Z", "state": 3, "mapId": "test", "channel": 1,
+                    "totalTargets": 1, "visitedTargets": 1, "failedTargets": 0, "publishable": true}],
+                  "observations": [{"observationId": "sorting-shop", "runId": "sorting-run", "shopVid": 123,
+                    "shopTitle": "Sorting", "ownerName": "Tester", "mapId": "test", "channel": 1,
+                    "x": 1, "y": 1, "z": 0, "observedAt": "2026-10-04T10:00:00Z", "itemCount": 5,
+                    "contentFingerprint": "sorting-fingerprint", "listings": [
+                      {"listingId": 1, "slotIndex": 0, "vnum": 80050, "itemName": "Sortowany medal", "count": 1, "priceRaw": 100, "unitPrice": 100, "tailField": 0, "attributes": [], "sockets": []},
+                      {"listingId": 2, "slotIndex": 1, "vnum": 80050, "itemName": "Sortowany medal", "count": 2, "priceRaw": 2000, "unitPrice": 1000, "tailField": 0, "attributes": [], "sockets": []},
+                      {"listingId": 3, "slotIndex": 2, "vnum": 80050, "itemName": "Sortowany medal", "count": 1, "priceRaw": 500, "unitPrice": 500, "tailField": 0, "attributes": [], "sockets": []},
+                      {"listingId": 4, "slotIndex": 3, "vnum": 80050, "itemName": "Sortowany medal", "count": 1, "priceRaw": 500, "unitPrice": 500, "tailField": 0, "attributes": [], "sockets": []},
+                      {"listingId": 5, "slotIndex": 4, "vnum": 80050, "itemName": "Sortowany medal", "count": 10, "priceRaw": 3000, "unitPrice": 300, "tailField": 0, "attributes": [], "sockets": []}
+                    ]}]
+                }
+                """;
+        for (String server : new String[]{"pandora", "elder", "beavium"}) {
+            String token = server.equals("pandora") ? "test-token" : server + "-test-token";
+            assertThat(postImport(http, "/internal/v1/servers/" + server + "/imports", token, body).statusCode()).isEqualTo(200);
+            String route = "/api/v1/servers/" + server + "/items?vnum=80050&query=Sortowany&size=2";
+            JsonNode cheapest = getJson(http, route);
+            assertThat(cheapest.path("totalElements").asLong()).isEqualTo(4);
+            assertThat(cheapest.path("items")).extracting(item -> item.path("unitPrice").asLong()).containsExactly(100L, 300L);
+            assertThat(getJson(http, route + "&sort=priceAsc")).isEqualTo(cheapest);
+            assertThat(getJson(http, route + "&sort=priceDesc").path("items"))
+                    .extracting(item -> item.path("unitPrice").asLong()).containsExactly(1000L, 500L);
+            assertThat(getJson(http, route + "&sort=priceDesc&page=1").path("items"))
+                    .extracting(item -> item.path("unitPrice").asLong()).containsExactly(300L, 100L);
+            JsonNode quantityPage = getJson(http, route + "&sort=quantity");
+            assertThat(quantityPage.path("items")).extracting(item -> item.path("unitPrice").asLong()).containsExactly(300L, 500L);
+            assertThat(quantityPage.path("items")).extracting(item -> item.path("totalQuantity").asLong()).containsExactly(10L, 2L);
+            assertThat(quantityPage.path("items").get(1).path("listingCount").asInt()).isEqualTo(2);
+            assertThat(getJson(http, route + "&sort=quantity&page=1").path("items"))
+                    .extracting(item -> item.path("unitPrice").asLong()).containsExactly(1000L, 100L);
+            assertThat(getJson(http, route + "&sort=quantity&page=3").path("totalElements").asLong()).isEqualTo(4);
+            assertThat(getJson(http, route + "&sort=quantity&page=3").path("items")).isEmpty();
+        }
+        assertThat(getJson(http, "/api/v1/items?vnum=80050&size=2&sort=priceDesc").path("items"))
+                .extracting(item -> item.path("unitPrice").asLong()).containsExactly(1000L, 500L);
     }
 
     private JsonNode importPayload(HttpClient http, String payload) throws Exception {

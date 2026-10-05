@@ -61,7 +61,16 @@ curl.exe "http://localhost:8080/api/v1/items?query=Zatruty&page=0&size=20"
 curl.exe "http://localhost:8080/api/v1/items?vnum=180&query="
 ```
 
-Every result contains price and quantity, indexed attributes and sockets, observation time, and the observed shop's VID/title/owner, map, channel, and coordinates. Results are historical and newest-first; the API deliberately does not infer whether a listing is still active.
+The server market overview is available at `/api/v1/servers/{server}/items/overview?limit=8`
+(and `/api/v1/items/overview` for Pandora). It returns up to 24 item cards, ranked by
+unique shop count, with minimum unit price, total quantity, scan ID/time and the
+number of observed shops. Only the latest completed publishable scan is used;
+repeat observations of one shop count once. Different item names sharing a VNUM
+remain separate variants. The endpoint uses one aggregate query and no per-item
+statistics requests. Overview views preserve catalog analytics without counting
+as user searches.
+
+Every result contains price and quantity, indexed attributes and sockets, observation time, and the observed shop's VID/title/owner, map, channel, and coordinates. Results use the latest published scan and default to unit price ascending; the API deliberately does not infer whether a listing is still active.
 
 ## Test
 
@@ -102,3 +111,80 @@ Daily catalog analytics and the Caddy-protected `/admin/stats` panel replace Uma
 and the log-based usage report. Deployment, secrets, schema and retention:
 [docs/statystyki-katalogu.md](docs/statystyki-katalogu.md).
 Analytics defaults to disabled outside Compose. No cookies or persistent client IDs.
+
+Overview supports `sort=shops` (default, unique shops) and `sort=quantity` (total units). Both rankings are calculated across the latest scan before applying the limit; quantity ties use shop count, then item ID and name.
+
+Offer search accepts `sort=priceAsc` (default), `sort=priceDesc`, or `sort=quantity`. Sorting happens across all matching aggregated offers before pagination. Quantity uses the total units in each aggregated offer, with cheaper unit prices first on ties. Observation time and listing ID make ties stable.
+
+
+## Item metadata catalog
+
+Import a server-specific ElderSuite `item_proto` TSV (the exact 19-column header is required):
+
+```powershell
+$env:SCANNER_TOKEN_BEAVIUM = "replace-with-the-beavium-token"
+python tools/import_item_proto.py --server beavium --file "C:\path\to\item_proto_beavium.tsv"
+```
+
+The protected endpoint `/internal/v1/servers/{server}/imports/item-proto` accepts
+`text/tab-separated-values; charset=utf-8` with the matching `X-Scanner-Token`.
+Validation completes before writing, and the import commits atomically. Reimporting
+updates definitions and replaces their base bonuses; definitions omitted from a
+file are retained. Invalid or duplicate VNUMs in the file,
+invalid numeric values and malformed columns return HTTP 400. Unusual inverted
+attack ranges are preserved and returned in `unusualAttackRangeVnums`, to support
+special item subtypes such as Beavium arrows.
+
+Migration V4 creates separate catalog tables in each game-server schema, indexed
+for future category/level and base-bonus filters. Offer search returns nullable
+`metadata` with type/subtype, required level, base stats, socket capacity and
+`builtInBonuses` (raw apply type/value). Metadata is fetched once per result page
+by VNUM, without modifying historical offers or requiring a new scan. Servers
+without an imported catalog return `metadata: null`. Scanned offer `attributes`
+and occupied `sockets` retain their existing meaning. Filtering and displaying
+this metadata in the web UI is supported in the item detail drawer and category/level filters.
+
+Production deployment imports the versioned `catalogs/item_proto_beavium.tsv`
+after the API health check via `ops/import-beavium-catalog.sh`. The script reads
+the existing Beavium token from the API container without logging it. Each deploy
+upserts this catalog, including its base bonuses, independently of shop scans.
+Update the versioned TSV when deploying future Beavium catalog changes.
+
+
+## Extra offer bonus filters
+
+Offer search accepts up to 7 repeated `bonus` parameters, e.g.
+`/api/v1/servers/beavium/items?bonus=72:40&bonus=16:10`.
+`bonus=72` requires the bonus to be present with any value, including zero or
+negative; `bonus=71:-25` requires a value greater than or equal to -25.
+All conditions must hold on the same scanned offer. They combine with name/VNUM
+filters, run before grouping, sorting and pagination, and are also applied to
+out-of-range page counts. Built-in catalog applies, base stats and socket bonuses
+are deliberately excluded. Duplicate bonus types, malformed integers and more
+than 7 conditions return HTTP 400.
+
+`/api/v1/servers/{server}/items/bonus-options` (or the Pandora legacy
+`/api/v1/items/bonus-options`) returns bonus types present in canonical shop
+observations of the latest completed publishable scan, with server-specific
+names and units. Unknown types remain available with their numeric type.
+Migration V5 adds an index on attribute type/value/listing ID. Filters use
+parameterized `EXISTS` predicates and do not multiply offer rows or totals.
+Price statistics still describe all bonuses of the selected item, independently
+of the offer filters; the web UI states this when bonus filters are active.
+
+
+## Category and required level filters
+
+Search supports `category=necklaces`, `minLevel=30`, `maxLevel=75` and their
+combination with extra bonuses, names and VNUMs. Both level bounds are inclusive;
+zero is a real bound, omitted bounds are unrestricted. Inverted or negative
+ranges and unknown category slugs return HTTP 400. Categories use engine
+item_proto type/subtype values (the weapon category excludes arrows and quivers),
+not name matching. Available category slugs and Polish labels come from
+`/api/v1/servers/{server}/items/category-options`, which also returns `available`
+for catalog availability. When any category/level condition is present, offers
+without a catalog definition are excluded. Without those conditions, existing
+search behavior includes offers with unknown metadata. The web UI disables
+category/level filtering when no catalog exists for that server. The existing
+V4 catalog indexes support these parameterized EXISTS predicates; no migration
+or scan rerun is required.

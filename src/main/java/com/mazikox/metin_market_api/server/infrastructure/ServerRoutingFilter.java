@@ -70,7 +70,7 @@ public class ServerRoutingFilter extends OncePerRequestFilter {
     }
 
     private static GameServer serverForImportPath(String path) {
-        String suffix = "/imports";
+        String suffix = path.endsWith("/imports/item-proto") ? "/imports/item-proto" : "/imports";
         if (!path.endsWith(suffix) || path.indexOf('/') != path.length() - suffix.length()) {
             return null;
         }

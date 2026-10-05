@@ -2,17 +2,22 @@ package com.mazikox.metin_market_api.market.infrastructure.jdbc;
 
 import com.mazikox.metin_market_api.market.api.ItemSearchResult;
 import com.mazikox.metin_market_api.market.application.port.MarketRepository;
+import com.mazikox.metin_market_api.market.domain.OfferSort;
 import com.mazikox.metin_market_api.market.domain.ItemPriceStatisticsCalculator.RawListing;
 import com.mazikox.metin_market_api.market.domain.ItemSuggestion;
+import com.mazikox.metin_market_api.market.domain.MarketOverview;
+import com.mazikox.metin_market_api.market.domain.MarketOverviewSort;
 import org.springframework.jdbc.core.simple.JdbcClient;
 import org.springframework.stereotype.Repository;
 import tools.jackson.core.type.TypeReference;
 import tools.jackson.databind.ObjectMapper;
 
+import com.mazikox.metin_market_api.market.domain.BonusFilter;
 import java.sql.Array;
 import java.sql.SQLException;
 import java.time.OffsetDateTime;
 import java.util.List;
+import com.mazikox.metin_market_api.market.domain.ItemFilters;
 
 @Repository
 public class JdbcMarketRepository implements MarketRepository {
@@ -27,7 +32,65 @@ public class JdbcMarketRepository implements MarketRepository {
     private record RowWithTotal(MarketListingRecord record, long totalCount) {}
 
     @Override
-    public MarketListingPage searchListings(String query, List<Integer> vnums, int page, int size) {
+    public MarketOverview findMarketOverview(int limit, MarketOverviewSort sort) {
+        // Keep cards and scan metadata in the same database snapshot.
+        // Imports arrive in batches, so caching by run ID could retain partial data.
+        return jdbc.sql("""
+                WITH latest_run AS (
+                    SELECT id, ended_at FROM scan_run
+                    WHERE state = 3 AND publishable = true
+                    ORDER BY ended_at DESC NULLS LAST, started_at DESC, id DESC
+                    LIMIT 1
+                ), ranked_observations AS (
+                    SELECT o.id,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY COALESCE(o.shop_vid::text, 'obs:' || o.id::text)
+                               ORDER BY o.observed_at DESC, o.id DESC
+                           ) AS rn
+                    FROM latest_run r
+                    JOIN shop_observation o ON o.scan_run_id = r.id
+                ), canonical_observations AS (
+                    SELECT id FROM ranked_observations WHERE rn = 1
+                ), item_totals AS (
+                    SELECT l.item_vnum, l.item_name,
+                           count(DISTINCT o.id) AS shop_count,
+                           sum(l.quantity)::bigint AS total_quantity,
+                           min(l.unit_price) AS minimum_price
+                    FROM canonical_observations o
+                    JOIN shop_listing l ON l.observation_id = o.id
+                    GROUP BY l.item_vnum, l.item_name
+                ), popular_items AS (
+                    SELECT * FROM item_totals
+                    ORDER BY CASE WHEN :byQuantity THEN total_quantity ELSE shop_count END DESC,
+                             shop_count DESC, item_vnum, item_name
+                    LIMIT :limit
+                )
+                SELECT r.id, r.ended_at,
+                       (SELECT count(*) FROM canonical_observations) AS observed_shop_count,
+                       COALESCE((SELECT jsonb_agg(jsonb_build_object(
+                           'vnum', p.item_vnum, 'itemName', p.item_name,
+                           'shopCount', p.shop_count, 'totalQuantity', p.total_quantity,
+                           'minimumPrice', p.minimum_price)
+                           ORDER BY CASE WHEN :byQuantity THEN p.total_quantity ELSE p.shop_count END DESC,
+                                    p.shop_count DESC, p.item_vnum, p.item_name)
+                           FROM popular_items p), '[]'::jsonb) AS items
+                FROM latest_run r
+                """).param("limit", limit).param("byQuantity", sort == MarketOverviewSort.QUANTITY).query((rs, rowNum) -> {
+            try {
+                return new MarketOverview(
+                        rs.getLong("id"), rs.getObject("ended_at", OffsetDateTime.class),
+                        rs.getLong("observed_shop_count"),
+                        objectMapper.<List<MarketOverview.PopularItem>>readValue(
+                                rs.getString("items"), new TypeReference<>() {}));
+            } catch (Exception e) {
+                throw new SQLException("Cannot decode market overview", e);
+            }
+        }).optional().orElseGet(MarketOverview::empty);
+    }
+
+
+    @Override
+    public MarketListingPage searchListings(String query, List<Integer> vnums, int page, int size, OfferSort sort, List<BonusFilter> bonuses, ItemFilters itemFilters) {
         boolean hasQuery = query != null && !query.isBlank();
         String filter;
         if (vnums.isEmpty()) {
@@ -36,6 +99,19 @@ public class JdbcMarketRepository implements MarketRepository {
             filter = hasQuery
                     ? "l.item_vnum IN (:vnums) AND public.unaccent(lower(l.item_name)) LIKE public.unaccent(lower(:query))"
                     : "l.item_vnum IN (:vnums)";
+        }
+        for (int i = 0; i < bonuses.size(); i++) {
+            // Conditions all belong to this listing, never different items in the same shop.
+            filter += " AND EXISTS (SELECT 1 FROM shop_listing_attribute ba WHERE ba.listing_id = l.id"
+                    + " AND ba.attr_type = :bonusType" + i
+                    + (bonuses.get(i).minimum() == null ? "" : " AND ba.attr_value >= :bonusMin" + i) + ")";
+        }
+        if (itemFilters.active()) {
+            filter += " AND EXISTS (SELECT 1 FROM item_definition d WHERE d.vnum = l.item_vnum"
+                    + (itemFilters.category() == null ? "" : " AND d.item_type = :categoryType"
+                        + (itemFilters.category().subtypes().isEmpty() ? "" : " AND d.item_subtype IN (:categorySubtypes)"))
+                    + (itemFilters.minLevel() == null ? "" : " AND d.required_level >= :minLevel")
+                    + (itemFilters.maxLevel() == null ? "" : " AND d.required_level <= :maxLevel") + ")";
         }
         String baseCte = """
                 WITH latest_run AS (
@@ -94,13 +170,19 @@ public class JdbcMarketRepository implements MarketRepository {
                 )
                 """.formatted(filter);
 
+        // Only fixed SQL clauses are selected; request values are never interpolated.
+        String order = switch (sort) {
+            case PRICE_ASC -> "unit_price ASC, observed_at DESC, listing_id DESC";
+            case PRICE_DESC -> "unit_price DESC, observed_at DESC, listing_id DESC";
+            case QUANTITY_DESC -> "total_quantity DESC, unit_price ASC, observed_at DESC, listing_id DESC";
+        };
         var dataSpec = jdbc.sql(baseCte + """
                 , scored AS (
                     SELECT *, count(*) OVER() AS total_count
                     FROM aggregated
                 ), page AS (
                     SELECT * FROM scored
-                    ORDER BY unit_price ASC, observed_at DESC, listing_id DESC
+                    ORDER BY %s
                     LIMIT :size OFFSET :offset
                 )
                 SELECT p.*,
@@ -113,13 +195,15 @@ public class JdbcMarketRepository implements MarketRepository {
                            ORDER BY s.socket_index)
                            FROM shop_listing_socket s WHERE s.listing_id = p.listing_id), '[]'::jsonb) AS sockets
                 FROM page p
-                """);
+                ORDER BY %s
+                """.formatted(order, order));
         if (hasQuery) {
             dataSpec = dataSpec.param("query", "%" + query + "%");
         }
         if (!vnums.isEmpty()) {
             dataSpec = dataSpec.param("vnums", vnums);
         }
+        dataSpec = bindItemFilters(bindBonuses(dataSpec, bonuses), itemFilters);
         dataSpec = dataSpec.param("size", size).param("offset", (long) page * size);
 
         List<RowWithTotal> rows = dataSpec.query((rs, rowNum) -> {
@@ -171,10 +255,47 @@ public class JdbcMarketRepository implements MarketRepository {
             if (!vnums.isEmpty()) {
                 countSpec = countSpec.param("vnums", vnums);
             }
-            total = countSpec.query(Long.class).single();
+            total = bindItemFilters(bindBonuses(countSpec, bonuses), itemFilters).query(Long.class).single();
         }
 
         return new MarketListingPage(items, total);
+    }
+
+    private static JdbcClient.StatementSpec bindItemFilters(JdbcClient.StatementSpec spec, ItemFilters filters) {
+        if (filters.category() != null) {
+            spec = spec.param("categoryType", filters.category().type());
+            if (!filters.category().subtypes().isEmpty()) spec = spec.param("categorySubtypes", filters.category().subtypes());
+        }
+        if (filters.minLevel() != null) spec = spec.param("minLevel", filters.minLevel());
+        if (filters.maxLevel() != null) spec = spec.param("maxLevel", filters.maxLevel());
+        return spec;
+    }
+
+    private static JdbcClient.StatementSpec bindBonuses(JdbcClient.StatementSpec spec, List<BonusFilter> bonuses) {
+        for (int i = 0; i < bonuses.size(); i++) {
+            spec = spec.param("bonusType" + i, bonuses.get(i).type());
+            if (bonuses.get(i).minimum() != null) spec = spec.param("bonusMin" + i, bonuses.get(i).minimum());
+        }
+        return spec;
+    }
+
+    @Override
+    public List<Integer> findAvailableBonusTypes() {
+        return jdbc.sql("""
+                WITH latest_run AS (
+                    SELECT id FROM scan_run WHERE state = 3 AND publishable = true
+                    ORDER BY ended_at DESC NULLS LAST, started_at DESC, id DESC LIMIT 1
+                ), ranked AS (
+                    SELECT o.id, ROW_NUMBER() OVER (
+                        PARTITION BY COALESCE(o.shop_vid::text, 'obs:' || o.id::text)
+                        ORDER BY o.observed_at DESC, o.id DESC) AS rn
+                    FROM shop_observation o JOIN latest_run r ON o.scan_run_id = r.id
+                )
+                SELECT DISTINCT a.attr_type FROM ranked o
+                JOIN shop_listing l ON l.observation_id = o.id
+                JOIN shop_listing_attribute a ON a.listing_id = l.id
+                WHERE o.rn = 1 AND a.attr_type > 0 ORDER BY a.attr_type
+                """).query(Integer.class).list();
     }
 
     @Override

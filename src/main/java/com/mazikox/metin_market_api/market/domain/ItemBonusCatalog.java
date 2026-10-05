@@ -142,6 +142,18 @@ public final class ItemBonusCatalog {
         return new Details("UNKNOWN", "Nieznany bonus", signed(value));
     }
 
+    public static String unit(GameServer server, int type) {
+        if (server != GameServer.PANDORA && server != GameServer.BEAVIUM) return "";
+        Metadata metadata = BONUSES.get(type);
+        if (metadata == null) return "";
+        return switch (metadata.format()) {
+            case PERCENT, PERCENT_SIGNED -> "%";
+            case SECONDS_FLAT_SIGNED -> "s";
+            case METERS_FLAT_SIGNED -> "m";
+            case FLAT_SIGNED, FLAG -> "";
+        };
+    }
+
     private static Map.Entry<Integer, Metadata> entry(int type, String code, String name, Format format) {
         return Map.entry(type, new Metadata(code, name, format));
     }

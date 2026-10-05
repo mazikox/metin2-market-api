@@ -124,6 +124,17 @@ jobs:
           echo "API health check failed after 12 attempts"
           exit 1
 
+      - name: Import Beavium item catalog
+        env:
+          VPS_HOST: ${{ secrets.VPS_HOST }}
+          VPS_USER: ${{ secrets.VPS_USER }}
+        run: |
+          ssh "$VPS_USER@$VPS_HOST" '
+            set -e
+            cd ~/metin2-market-api
+            bash ops/import-beavium-catalog.sh
+          '
+
       - name: Verify Caddy routing smoke test
         run: |
           for path in "" "?server=pandora" "?server=elder" "?server=beavium" "?server=unknown" "?server=pandora&server=elder" "?server=elder&server=pandora" "?server=unknown&server=pandora" "?server=&server=elder" "?server=beavium&server=unknown"; do

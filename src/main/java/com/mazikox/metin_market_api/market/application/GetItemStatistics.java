@@ -21,11 +21,14 @@ public class GetItemStatistics {
     }
 
     public ItemPriceStatisticsResponse getStatistics(List<Integer> vnums) {
+        return getStatistics(vnums, List.of());
+    }
+    public ItemPriceStatisticsResponse getStatistics(List<Integer> vnums, List<String> maps) {
         if (vnums == null || vnums.isEmpty()) {
             return new ItemPriceStatisticsResponse(List.of());
         }
 
-        List<RawListing> rawListings = marketRepository.findCanonicalListings(vnums);
+        List<RawListing> rawListings = maps.isEmpty() ? marketRepository.findCanonicalListings(vnums) : marketRepository.findCanonicalListings(vnums, maps);
 
         Map<Integer, List<RawListing>> byVnum = new LinkedHashMap<>();
         for (RawListing listing : rawListings) {

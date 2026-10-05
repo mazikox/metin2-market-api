@@ -36,6 +36,11 @@ public class ServerRoutingFilter extends OncePerRequestFilter {
                 response.sendError(HttpStatus.NOT_FOUND.value());
                 return;
             }
+        } else if (path.startsWith("/api/v1/admin/servers/")) {
+            String remainder = path.substring("/api/v1/admin/servers/".length());
+            server = remainder.endsWith("/scans") && remainder.indexOf('/') == remainder.length() - 6
+                    ? GameServer.fromSlug(remainder.substring(0, remainder.length() - 6)).orElse(null) : null;
+            if (server == null) { response.sendError(HttpStatus.NOT_FOUND.value()); return; }
         } else if (path.startsWith(SERVER_IMPORT_PREFIX)) {
             server = serverForImportPath(path.substring(SERVER_IMPORT_PREFIX.length()));
             if (server == null) {

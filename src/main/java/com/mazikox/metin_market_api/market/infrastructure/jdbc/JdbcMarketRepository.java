@@ -37,21 +37,9 @@ public class JdbcMarketRepository implements MarketRepository {
         // Imports arrive in batches, so caching by run ID could retain partial data.
         return jdbc.sql("""
                 WITH latest_run AS (
-                    SELECT id, ended_at FROM scan_run
-                    WHERE state = 3 AND publishable = true
-                    ORDER BY ended_at DESC NULLS LAST, started_at DESC, id DESC
-                    LIMIT 1
-                ), ranked_observations AS (
-                    SELECT o.id,
-                           ROW_NUMBER() OVER (
-                               PARTITION BY COALESCE(o.shop_vid::text, 'obs:' || o.id::text)
-                               ORDER BY o.observed_at DESC, o.id DESC
-                           ) AS rn
-                    FROM latest_run r
-                    JOIN shop_observation o ON o.scan_run_id = r.id
-                ), canonical_observations AS (
-                    SELECT id FROM ranked_observations WHERE rn = 1
-                ), item_totals AS (
+                    SELECT id, ended_at FROM market_active_scan
+                    ORDER BY ended_at DESC NULLS LAST, started_at DESC, id DESC LIMIT 1
+                ), canonical_observations AS (SELECT * FROM market_canonical_observation), item_totals AS (
                     SELECT l.item_vnum, l.item_name,
                            count(DISTINCT o.id) AS shop_count,
                            sum(l.quantity)::bigint AS total_quantity,
@@ -73,7 +61,11 @@ public class JdbcMarketRepository implements MarketRepository {
                            'minimumPrice', p.minimum_price)
                            ORDER BY CASE WHEN :byQuantity THEN p.total_quantity ELSE p.shop_count END DESC,
                                     p.shop_count DESC, p.item_vnum, p.item_name)
-                           FROM popular_items p), '[]'::jsonb) AS items
+                           FROM popular_items p), '[]'::jsonb) AS items,
+                       COALESCE((SELECT jsonb_agg(jsonb_build_object(
+                           'mapId', a.market_map_id, 'scanId', a.id, 'scanEndedAt', a.ended_at,
+                           'observedShopCount', (SELECT count(*) FROM canonical_observations co WHERE co.scan_run_id = a.id))
+                           ORDER BY a.market_map_id) FROM market_active_scan a), '[]'::jsonb) AS maps
                 FROM latest_run r
                 """).param("limit", limit).param("byQuantity", sort == MarketOverviewSort.QUANTITY).query((rs, rowNum) -> {
             try {
@@ -81,7 +73,9 @@ public class JdbcMarketRepository implements MarketRepository {
                         rs.getLong("id"), rs.getObject("ended_at", OffsetDateTime.class),
                         rs.getLong("observed_shop_count"),
                         objectMapper.<List<MarketOverview.PopularItem>>readValue(
-                                rs.getString("items"), new TypeReference<>() {}));
+                                rs.getString("items"), new TypeReference<>() {}),
+                        objectMapper.<List<MarketOverview.MapScan>>readValue(
+                                rs.getString("maps"), new TypeReference<>() {}));
             } catch (Exception e) {
                 throw new SQLException("Cannot decode market overview", e);
             }
@@ -113,23 +107,9 @@ public class JdbcMarketRepository implements MarketRepository {
                     + (itemFilters.minLevel() == null ? "" : " AND d.required_level >= :minLevel")
                     + (itemFilters.maxLevel() == null ? "" : " AND d.required_level <= :maxLevel") + ")";
         }
+        if (!itemFilters.maps().isEmpty()) filter += " AND o.market_map_id IN (:maps)";
         String baseCte = """
-                WITH latest_run AS (
-                    SELECT id FROM scan_run
-                    WHERE state = 3 AND publishable = true
-                    ORDER BY ended_at DESC NULLS LAST, started_at DESC, id DESC
-                    LIMIT 1
-                ), ranked_observations AS (
-                    SELECT o.*,
-                           ROW_NUMBER() OVER (
-                               PARTITION BY COALESCE(o.shop_vid::text, 'obs:' || o.id::text)
-                               ORDER BY o.observed_at DESC, o.id DESC
-                           ) AS rn
-                    FROM latest_run r
-                    JOIN shop_observation o ON o.scan_run_id = r.id
-                ), canonical_observations AS (
-                    SELECT * FROM ranked_observations WHERE rn = 1
-                ), matching_listings AS (
+                WITH canonical_observations AS (SELECT * FROM market_canonical_observation), matching_listings AS (
                     SELECT l.id, l.observation_id, l.item_vnum, l.item_name, l.quantity,
                            l.price_raw, l.unit_price, l.tail_field,
                            o.shop_vid, o.shop_title, o.owner_name, o.map_id, o.channel,
@@ -262,6 +242,7 @@ public class JdbcMarketRepository implements MarketRepository {
     }
 
     private static JdbcClient.StatementSpec bindItemFilters(JdbcClient.StatementSpec spec, ItemFilters filters) {
+        if (!filters.maps().isEmpty()) spec = spec.param("maps", filters.maps());
         if (filters.category() != null) {
             spec = spec.param("categoryType", filters.category().type());
             if (!filters.category().subtypes().isEmpty()) spec = spec.param("categorySubtypes", filters.category().subtypes());
@@ -282,15 +263,7 @@ public class JdbcMarketRepository implements MarketRepository {
     @Override
     public List<Integer> findAvailableBonusTypes() {
         return jdbc.sql("""
-                WITH latest_run AS (
-                    SELECT id FROM scan_run WHERE state = 3 AND publishable = true
-                    ORDER BY ended_at DESC NULLS LAST, started_at DESC, id DESC LIMIT 1
-                ), ranked AS (
-                    SELECT o.id, ROW_NUMBER() OVER (
-                        PARTITION BY COALESCE(o.shop_vid::text, 'obs:' || o.id::text)
-                        ORDER BY o.observed_at DESC, o.id DESC) AS rn
-                    FROM shop_observation o JOIN latest_run r ON o.scan_run_id = r.id
-                )
+                WITH ranked AS (SELECT * FROM market_canonical_observation)
                 SELECT DISTINCT a.attr_type FROM ranked o
                 JOIN shop_listing l ON l.observation_id = o.id
                 JOIN shop_listing_attribute a ON a.listing_id = l.id
@@ -303,7 +276,7 @@ public class JdbcMarketRepository implements MarketRepository {
         String filter = vnum == null
                 ? "public.unaccent(lower(c.item_name)) LIKE public.unaccent(lower(:query))"
                 : "c.item_vnum = :vnum AND public.unaccent(lower(c.item_name)) LIKE public.unaccent(lower(:query))";
-        String catalog = "WITH catalog AS (SELECT DISTINCT item_vnum, item_name FROM shop_listing) ";
+        String catalog = "WITH catalog AS (SELECT DISTINCT l.item_vnum, l.item_name FROM shop_listing l JOIN market_canonical_observation o ON o.id = l.observation_id) ";
         var count = jdbc.sql(catalog + "SELECT count(*) FROM catalog c WHERE " + filter)
                 .param("query", "%" + query + "%");
         if (vnum != null) {
@@ -317,7 +290,7 @@ public class JdbcMarketRepository implements MarketRepository {
         String filter = vnum == null
                 ? "public.unaccent(lower(c.item_name)) LIKE public.unaccent(lower(:query))"
                 : "c.item_vnum = :vnum AND public.unaccent(lower(c.item_name)) LIKE public.unaccent(lower(:query))";
-        String catalog = "WITH catalog AS (SELECT DISTINCT item_vnum, item_name FROM shop_listing) ";
+        String catalog = "WITH catalog AS (SELECT DISTINCT l.item_vnum, l.item_name FROM shop_listing l JOIN market_canonical_observation o ON o.id = l.observation_id) ";
         var items = jdbc.sql(catalog + "SELECT item_name, item_vnum FROM catalog c WHERE " + filter
                         + " ORDER BY lower(item_name), item_vnum LIMIT :limit")
                 .param("query", "%" + query + "%")
@@ -334,7 +307,7 @@ public class JdbcMarketRepository implements MarketRepository {
         String filter = vnum == null
                 ? "public.unaccent(lower(c.item_name)) LIKE public.unaccent(lower(:query))"
                 : "c.item_vnum = :vnum AND public.unaccent(lower(c.item_name)) LIKE public.unaccent(lower(:query))";
-        String catalog = "WITH catalog AS (SELECT DISTINCT item_vnum, item_name FROM shop_listing) ";
+        String catalog = "WITH catalog AS (SELECT DISTINCT l.item_vnum, l.item_name FROM shop_listing l JOIN market_canonical_observation o ON o.id = l.observation_id) ";
         String familiesSql = catalog + ", " + """
                 matching AS (
                     SELECT item_name FROM catalog c WHERE %s
@@ -373,34 +346,24 @@ public class JdbcMarketRepository implements MarketRepository {
 
     @Override
     public List<RawListing> findCanonicalListings(List<Integer> vnums) {
+        return findCanonicalListings(vnums, List.of());
+    }
+    @Override
+    public List<RawListing> findCanonicalListings(List<Integer> vnums, List<String> maps) {
         if (vnums == null || vnums.isEmpty()) {
             return List.of();
         }
         String placeholders = String.join(", ", vnums.stream().map(vnum -> ":vnum" + vnum).toList());
         var query = jdbc.sql("""
-                WITH latest_run AS (
-                    SELECT id FROM scan_run
-                    WHERE state = 3 AND publishable = true
-                    ORDER BY ended_at DESC NULLS LAST, started_at DESC, id DESC
-                    LIMIT 1
-                ), ranked_observations AS (
-                    SELECT o.*,
-                           ROW_NUMBER() OVER (
-                               PARTITION BY COALESCE(o.shop_vid::text, 'obs:' || o.id::text)
-                               ORDER BY o.observed_at DESC, o.id DESC
-                           ) AS rn
-                    FROM latest_run r
-                    JOIN shop_observation o ON o.scan_run_id = r.id
-                ), canonical_observations AS (
-                    SELECT * FROM ranked_observations WHERE rn = 1
-                )
+                WITH canonical_observations AS (SELECT * FROM market_canonical_observation)
                 SELECT l.item_vnum, l.item_name, l.unit_price, l.quantity,
-                       COALESCE(o.shop_vid::text, 'obs:' || o.id::text) AS shop_key
+                       o.market_map_id || ':' || COALESCE(o.channel::text, '-') || ':' || COALESCE(o.shop_vid::text, 'obs:' || o.id::text) AS shop_key
                 FROM canonical_observations o
                 JOIN shop_listing l ON l.observation_id = o.id
-                WHERE l.item_vnum IN (%s)
+                WHERE l.item_vnum IN (%s) %s
                 ORDER BY l.item_vnum, l.unit_price ASC
-                """.formatted(placeholders));
+                """.formatted(placeholders, maps.isEmpty() ? "" : "AND o.market_map_id IN (:maps)"));
+        if (!maps.isEmpty()) query = query.param("maps", maps);
         for (Integer vnum : vnums) {
             query = query.param("vnum" + vnum, vnum);
         }

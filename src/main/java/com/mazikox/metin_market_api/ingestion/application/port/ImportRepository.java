@@ -8,6 +8,7 @@ public interface ImportRepository {
 
     record ExistingBatch(String hash, int runs, int observations, int listings) {}
     record ExistingObservation(String fingerprint, String payloadHash) {}
+    record ExistingScanRun(long id, String mapId) {}
 
     int claimBatch(String sourceId, String batchId, String payloadHash);
 
@@ -15,7 +16,7 @@ public interface ImportRepository {
 
     int upsertScanRun(String sourceId, ImportRequest.ScanRun run);
 
-    Optional<Long> findScanRunId(String sourceId, String sourceRunId);
+    Optional<ExistingScanRun> findScanRun(String sourceId, String sourceRunId);
 
     Optional<Long> insertObservation(String sourceId, Long runPk, ImportRequest.Observation observation, String observationHash);
 

@@ -44,9 +44,9 @@ public class JdbcImportRepository implements ImportRepository {
         return jdbc.sql("""
                 INSERT INTO scan_run
                     (source_id, source_run_id, started_at, ended_at, state, map_id, channel,
-                     total_targets, visited_targets, failed_targets, publishable)
+                     total_targets, visited_targets, failed_targets, publishable, expected_observations)
                 VALUES (:sourceId, :runId, :startedAt, :endedAt, :state, :mapId, :channel,
-                        :totalTargets, :visitedTargets, :failedTargets, :publishable)
+                        :totalTargets, :visitedTargets, :failedTargets, :publishable, :expectedObservations)
                 ON CONFLICT (source_id, source_run_id) DO UPDATE SET
                     ended_at = EXCLUDED.ended_at,
                     state = EXCLUDED.state,
@@ -55,7 +55,9 @@ public class JdbcImportRepository implements ImportRepository {
                     total_targets = EXCLUDED.total_targets,
                     visited_targets = EXCLUDED.visited_targets,
                     failed_targets = EXCLUDED.failed_targets,
-                    publishable = EXCLUDED.publishable
+                    publishable = EXCLUDED.publishable,
+                    expected_observations = EXCLUDED.expected_observations
+                WHERE scan_run.map_id = EXCLUDED.map_id
                 """)
                 .params(params(
                         "sourceId", sourceId, "runId", run.runId(),
@@ -63,16 +65,16 @@ public class JdbcImportRepository implements ImportRepository {
                         "state", run.state(), "mapId", run.mapId(),
                         "channel", run.channel(), "totalTargets", run.totalTargets(),
                         "visitedTargets", run.visitedTargets(), "failedTargets", run.failedTargets(),
-                        "publishable", run.isPublishable()))
+                        "publishable", run.isPublishable(), "expectedObservations", run.expectedObservations()))
                 .update();
     }
 
     @Override
-    public Optional<Long> findScanRunId(String sourceId, String sourceRunId) {
+    public Optional<ExistingScanRun> findScanRun(String sourceId, String sourceRunId) {
         return jdbc.sql("""
-                SELECT id FROM scan_run WHERE source_id = :sourceId AND source_run_id = :runId
+                SELECT id, map_id FROM scan_run WHERE source_id = :sourceId AND source_run_id = :runId
                 """).param("sourceId", sourceId).param("runId", sourceRunId)
-                .query(Long.class).optional();
+                .query((rs, row) -> new ExistingScanRun(rs.getLong(1), rs.getString(2))).optional();
     }
 
     @Override

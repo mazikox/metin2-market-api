@@ -36,6 +36,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--token", help="Scanner token; otherwise read from the environment variable for --server")
     parser.add_argument("--source-id", help="Source identifier (defaults to the existing Pandora source only)")
     parser.add_argument("--batch-size", type=int, default=20, help="Number of observations per batch")
+    parser.add_argument("--map", dest="maps", action="append", help="Map ID to import; repeat with --latest-completed to select latest scan for each map")
 
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument("--latest-completed", action="store_true", help="Import only the newest completed scan run")
@@ -72,7 +73,7 @@ def find_newest_run(connection: sqlite3.Connection) -> dict | None:
 
 
 def select_target_run(
-    connection: sqlite3.Connection, run_id: str | None, latest_completed: bool, force_completed: bool
+    connection: sqlite3.Connection, run_id: str | None, latest_completed: bool, force_completed: bool, map_id: str | None = None
 ) -> dict:
     if force_completed and not run_id:
         raise RuntimeError("--force-completed requires explicit --run-id <id>")
@@ -80,13 +81,13 @@ def select_target_run(
     if latest_completed:
         row = connection.execute(
             "SELECT * FROM shop_scan_run "
-            "WHERE state = ? "
+            "WHERE state = ? AND (? IS NULL OR CASE WHEN map_id = 'metin2_map_a1_summer' THEN 'metin2_map_a1' ELSE map_id END = ?) "
             "ORDER BY datetime(COALESCE(ended_at, started_at)) DESC, started_at DESC, run_id DESC "
             "LIMIT 1",
-            (STATE_COMPLETED,),
+            (STATE_COMPLETED, map_id, map_id),
         ).fetchone()
         if not row:
-            raise RuntimeError("No completed scan runs found in SQLite database (state=3)")
+            raise RuntimeError(f"No completed scan runs found for map {map_id or 'any'} (state=3)")
         return dict(row)
 
     if run_id:
@@ -206,6 +207,8 @@ def load_run_payload_and_observations(
         "SELECT * FROM shop_observation WHERE run_id = ? ORDER BY observed_at, observation_id",
         (target_run_id,),
     ):
+        if row["map_id"] != run_row["map_id"]:
+            raise RuntimeError("Observation map differs from selected scan map")
         obs_id = row["observation_id"]
         observation_listings = listings[obs_id]
         if row["item_count"] != len(observation_listings):
@@ -238,11 +241,12 @@ def load_run_payload_and_observations(
         "attributes": sum(len(value) for value in attributes.values()),
         "sockets": sum(len(value) for value in sockets.values()),
     }
+    run_payload["expectedObservations"] = len(observations)
     return run_payload, observations, counts, is_forced
 
 
 def read_run_data(
-    path: Path, run_id: str | None, latest_completed: bool, publishable: bool, force_completed: bool
+    path: Path, run_id: str | None, latest_completed: bool, publishable: bool, force_completed: bool, map_id: str | None = None
 ) -> tuple[dict, list[dict], dict[str, int], bool, int]:
     if not path.is_file():
         raise RuntimeError(f"SQLite database does not exist: {path}")
@@ -251,7 +255,7 @@ def read_run_data(
     connection = sqlite3.connect(database_uri, uri=True)
     connection.row_factory = sqlite3.Row
     try:
-        run_row = select_target_run(connection, run_id, latest_completed, force_completed)
+        run_row = select_target_run(connection, run_id, latest_completed, force_completed, map_id)
         run_payload, observations, counts, is_forced = load_run_payload_and_observations(
             connection, run_row, publishable, force_completed
         )
@@ -320,76 +324,81 @@ def main() -> int:
         return 2
 
     try:
-        run_payload, observations, counts, is_forced, orig_state = read_run_data(
-            database, args.run_id, args.latest_completed, args.publishable, args.force_completed
-        )
+        selected_maps = ["metin2_map_a1" if m == "metin2_map_a1_summer" else m for m in args.maps or []]
+        if args.run_id and selected_maps:
+            raise RuntimeError("--map requires --latest-completed; --run-id already selects one scan")
+        if len(set(selected_maps)) != len(selected_maps):
+            raise RuntimeError("Repeated map IDs")
+        selected_runs = [read_run_data(database, args.run_id, args.latest_completed,
+                         args.publishable, args.force_completed, map_id)
+                         for map_id in selected_maps or [None]]
+        for run_payload, observations, counts, is_forced, orig_state in selected_runs:
+            batch_count = max(1, (len(observations) + args.batch_size - 1) // args.batch_size)
+            run_id = run_payload["runId"]
 
-        batch_count = max(1, (len(observations) + args.batch_size - 1) // args.batch_size)
-        run_id = run_payload["runId"]
+            print("=== Selected Scanner Run Summary ===")
+            print(f"Game server:       {args.server}")
+            print(f"Run ID:            {run_id}")
+            print(f"Started at:        {run_payload['startedAt']}")
+            print(f"Ended at:          {run_payload['endedAt']}")
+            if is_forced:
+                print(f"State:             {run_payload['state']} (FORCED COMPLETED, original SQLite state={orig_state})")
+                print(f"Forced completion: True (ended_at resolved to '{run_payload['endedAt']}')")
+            else:
+                print(f"State:             {run_payload['state']} (COMPLETED)")
+                print(f"Forced completion: False")
+            print(f"Map ID:            {run_payload['mapId']}")
+            print(f"Channel:           {run_payload['channel']}")
+            print(f"Targets:           total={run_payload['totalTargets']}, visited={run_payload['visitedTargets']}, failed={run_payload['failedTargets']}")
+            print(f"Publishable:       {run_payload['publishable']}")
+            print(f"Observations:      {counts['observations']}")
+            print(f"Listings:          {counts['listings']}")
+            print(f"Attributes:        {counts['attributes']}")
+            print(f"Sockets:           {counts['sockets']}")
+            print(f"Total batches:     {batch_count} (batch_size={args.batch_size})")
+            print("====================================")
 
-        print("=== Selected Scanner Run Summary ===")
-        print(f"Game server:       {args.server}")
-        print(f"Run ID:            {run_id}")
-        print(f"Started at:        {run_payload['startedAt']}")
-        print(f"Ended at:          {run_payload['endedAt']}")
-        if is_forced:
-            print(f"State:             {run_payload['state']} (FORCED COMPLETED, original SQLite state={orig_state})")
-            print(f"Forced completion: True (ended_at resolved to '{run_payload['endedAt']}')")
-        else:
-            print(f"State:             {run_payload['state']} (COMPLETED)")
-            print(f"Forced completion: False")
-        print(f"Map ID:            {run_payload['mapId']}")
-        print(f"Channel:           {run_payload['channel']}")
-        print(f"Targets:           total={run_payload['totalTargets']}, visited={run_payload['visitedTargets']}, failed={run_payload['failedTargets']}")
-        print(f"Publishable:       {run_payload['publishable']}")
-        print(f"Observations:      {counts['observations']}")
-        print(f"Listings:          {counts['listings']}")
-        print(f"Attributes:        {counts['attributes']}")
-        print(f"Sockets:           {counts['sockets']}")
-        print(f"Total batches:     {batch_count} (batch_size={args.batch_size})")
-        print("====================================")
+            if args.dry_run:
+                print("DRY RUN: No requests sent to the backend.")
+                continue
 
-        if args.dry_run:
-            print("DRY RUN: No requests sent to the backend.")
-            return 0
+            accepted = {"runs": 0, "observations": 0, "listings": 0}
 
-        accepted = {"runs": 0, "observations": 0, "listings": 0}
+            for index in range(batch_count):
+                start = index * args.batch_size
+                batch_observations = observations[start : start + args.batch_size]
+                batch_id = f"sqlite-v2-{run_id}-{index + 1:04d}"
+                payload = {
+                    "sourceId": source_id,
+                    "batchId": batch_id,
+                    "runs": [run_payload] if index == 0 else [],
+                    "observations": batch_observations,
+                }
+                result = post_batch(args.api_url, token, payload, args.server)
+                accepted["runs"] += result["importedRuns"]
+                accepted["observations"] += result["importedObservations"]
+                accepted["listings"] += result["importedListings"]
+                print(
+                    f"Batch {index + 1}/{batch_count} accepted: "
+                    f"observations={result['importedObservations']}, "
+                    f"listings={result['importedListings']}, "
+                    f"batchId={batch_id}"
+                )
 
-        for index in range(batch_count):
-            start = index * args.batch_size
-            batch_observations = observations[start : start + args.batch_size]
-            batch_id = f"sqlite-{run_id}-{index + 1:04d}"
-            payload = {
-                "sourceId": source_id,
-                "batchId": batch_id,
-                "runs": [run_payload] if index == 0 else [],
-                "observations": batch_observations,
-            }
-            result = post_batch(args.api_url, token, payload, args.server)
-            accepted["runs"] += result["importedRuns"]
-            accepted["observations"] += result["importedObservations"]
-            accepted["listings"] += result["importedListings"]
+            print("Import complete.")
             print(
-                f"Batch {index + 1}/{batch_count} accepted: "
-                f"observations={result['importedObservations']}, "
-                f"listings={result['importedListings']}, "
-                f"batchId={batch_id}"
+                f"Run {run_id} processed: "
+                f"observations={counts['observations']}, listings={counts['listings']}"
             )
-
-        print("Import complete.")
-        print(
-            f"Run {run_id} processed: "
-            f"observations={counts['observations']}, listings={counts['listings']}"
-        )
-        print(
-            "Rows reported affected by the API: "
-            f"runs={accepted['runs']}, observations={accepted['observations']}, "
-            f"listings={accepted['listings']}"
-        )
-        print(
-            "A safe rerun reports zero new observations/listings; runs are upserted "
-            "and may still be reported as affected."
-        )
+            print(
+                "Rows reported affected by the API: "
+                f"runs={accepted['runs']}, observations={accepted['observations']}, "
+                f"listings={accepted['listings']}"
+            )
+            print(
+                "A safe rerun reports zero new observations/listings; runs are upserted "
+                "and may still be reported as affected."
+            )
         return 0
     except (RuntimeError, sqlite3.Error, ValueError, KeyError) as error:
         print(f"ERROR: {error}", file=sys.stderr)

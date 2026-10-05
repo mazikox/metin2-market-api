@@ -36,6 +36,7 @@ class MarketApiIntegrationTest {
         registry.add("app.scanner-token.pandora", () -> "test-token");
         registry.add("app.scanner-token.elder", () -> "elder-test-token");
         registry.add("app.scanner-token.beavium", () -> "beavium-test-token");
+        registry.add("app.analytics.proxy-token", () -> "map-admin-proxy-token-for-tests-32-chars");
     }
 
     @Autowired ObjectMapper objectMapper;
@@ -56,6 +57,11 @@ class MarketApiIntegrationTest {
                          beavium.synchronization_batch,
                          pandora.item_definition, elder.item_definition, beavium.item_definition CASCADE
                 """).update());
+        ServerContext.withServer(GameServer.PANDORA, () -> {
+            for (String schema : java.util.List.of("pandora", "elder", "beavium"))
+                jdbc.sql("INSERT INTO " + schema + ".market_map_selection (map_id) VALUES ('metin2_map_a1'), ('metin2_map_b1'), ('metin2_map_c1')").update();
+            return null;
+        });
     }
 
     private static final String PROTO_HEADER = "vnum\tname\ttype\tsubtype\tsize\tanti\treq_level\tdef\tmin_atk\tmax_atk\tmin_matk\tmax_matk\tsockets\tapp1_t\tapp1_v\tapp2_t\tapp2_v\tapp3_t\tapp3_v\n";
@@ -673,10 +679,9 @@ class MarketApiIntegrationTest {
         JsonNode multiVnumStats = getJson(http, "/api/v1/items/statistics?vnum=1000&vnum=3000").path("items");
         assertThat(multiVnumStats).hasSize(2);
 
-        // Verify suggestions include items from all runs across the historical catalog
+        // Suggestions follow the same published snapshot as offers and statistics.
         JsonNode suggestions = getJson(http, "/api/v1/items/suggestions?query=Czesciowy");
-        assertThat(suggestions.path("totalMatches").asLong()).isEqualTo(1);
-        assertThat(suggestions.path("suggestions").get(0).path("name").asText()).isEqualTo("Czesciowy Przedmiot D");
+        assertThat(suggestions.path("totalMatches").asLong()).isZero();
     }
 
     @Test
@@ -950,4 +955,111 @@ class MarketApiIntegrationTest {
         assertThat(response.statusCode()).isEqualTo(200);
         return objectMapper.readTree(response.body());
     }
+    private String mapPayload(String run, String map, int day, int price, int expected, int observation, boolean includeRun) {
+        String runJson = includeRun ? """
+                {"runId":"%s", "startedAt":"2026-10-%02dT09:00:00Z", "endedAt":"2026-10-%02dT10:00:00Z",
+                 "state":3,"mapId":"%s","totalTargets":2,"visitedTargets":2,"failedTargets":0,
+                 "publishable":true,"expectedObservations":%d}
+                """.formatted(run, day, day, map, expected) : "";
+        return """
+                {"sourceId":"map-test", "batchId":"%s-%d", "runs":[%s],"observations":[
+                  {"observationId":"%s-%d","runId":"%s","shopVid":%d,"mapId":"%s",
+                   "x":0,"y":0,"z":0,"observedAt":"2026-10-%02dT09:30:00Z","contentFingerprint":"%s-%d",
+                   "itemCount":1,"listings":[{"listingId":1,"slotIndex":0,"vnum":180,
+                   "itemName":"Przedmiot %s","count":1,"priceRaw":%d,"unitPrice":%d,"tailField":0,
+                   "attributes":[{"slotIndex":0,"attrType":%d,"attrValue":10}],"sockets":[]}]}]}
+                """.formatted(run, observation, runJson, run, observation, run, 77 + observation, map,
+                        day, run, observation, run, price, price, price);
+    }
+
+    private HttpResponse<String> adminScans(HttpClient http, String server, String body, boolean action) throws Exception {
+        var request = HttpRequest.newBuilder(URI.create("http://localhost:" + port + "/api/v1/admin/servers/" + server + "/scans"))
+                .header("X-Analytics-Proxy-Token", "map-admin-proxy-token-for-tests-32-chars")
+                .header("X-Analytics-Admin", "test-admin");
+        if (body != null) {
+            request.header("Content-Type", "application/json");
+            request.header("Origin", "https://metin2bazar.pl");
+            request.header("Sec-Fetch-Site", "same-origin");
+            if (action) request.header("X-Admin-Action", "scan-selection");
+            request.PUT(HttpRequest.BodyPublishers.ofString(body));
+        }
+        return http.send(request.build(), HttpResponse.BodyHandlers.ofString());
+    }
+    private String selectMap(String map, boolean enabled, Long scan) {
+        return "{\"mapId\":\"" + map + "\",\"enabled\":" + enabled + ",\"selectedScanId\":" + scan + "}";
+    }
+    private long mapRunId(String run) {
+        return ServerContext.withServer(GameServer.BEAVIUM, () -> jdbc.sql("SELECT id FROM scan_run WHERE source_run_id=:run")
+                .param("run", run).query(Long.class).single());
+    }
+
+    @Test
+    void mapMarketsAreCombinedAndAdminCanPinDisableAndRestoreWithoutCrossServerAccess() throws Exception {
+        var http = HttpClient.newHttpClient();
+        String path = "/internal/v1/servers/beavium/imports";
+        for (String map : java.util.List.of("metin2_map_a1", "metin2_map_b1", "metin2_map_c1")) {
+            int price = map.contains("a1") ? 10 : map.contains("b1") ? 20 : 30;
+            assertThat(postImport(http, path, "beavium-test-token", mapPayload(map, map, 1, price, 1, 1, true)).statusCode()).isEqualTo(200);
+        }
+        assertThat(postImport(http, path, "beavium-test-token", mapPayload("new-a", "metin2_map_a1_summer", 2, 15, 1, 1, true)).statusCode()).isEqualTo(200);
+        var results = getJson(http, "/api/v1/servers/beavium/items?size=100");
+        assertThat(results.path("totalElements").asLong()).isEqualTo(3);
+        assertThat(results.path("items").findValues("unitPrice").stream().map(JsonNode::asInt).toList()).containsExactly(15,20,30);
+        assertThat(getJson(http, "/api/v1/servers/beavium/items/statistics?vnum=180").toString()).contains("\"contributingShopCount\":3");
+        var overview = getJson(http, "/api/v1/servers/beavium/items/overview");
+        assertThat(overview.path("observedShopCount").asLong()).isEqualTo(3);
+        assertThat(overview.path("maps")).hasSize(3);
+        var onlyA = getJson(http, "/api/v1/servers/beavium/items?map=metin2_map_a1&size=1");
+        assertThat(onlyA.path("totalElements").asLong()).isEqualTo(1);
+        assertThat(onlyA.path("items").get(0).path("unitPrice").asInt()).isEqualTo(15);
+        assertThat(getJson(http, "/api/v1/servers/beavium/items?map=metin2_map_a1_summer&size=1&page=99").path("totalElements").asLong()).isEqualTo(1);
+        assertThat(getJson(http, "/api/v1/servers/beavium/items?map=metin2_map_a1&map=metin2_map_c1&bonus=30:10").path("totalElements").asLong()).isEqualTo(1);
+        assertThat(getJson(http, "/api/v1/servers/beavium/items/statistics?vnum=180&map=metin2_map_a1").toString()).contains("\"contributingShopCount\":1");
+        assertThat(getJson(http, "/api/v1/servers/beavium/items/map-options")).hasSize(3);
+        assertThat(getJson(http, "/api/v1/servers/elder/items").path("totalElements").asLong()).isZero();
+        String adminPath = "/api/v1/admin/servers/beavium/scans";
+        assertThat(http.send(HttpRequest.newBuilder(URI.create("http://localhost:"+port+adminPath)).GET().build(), HttpResponse.BodyHandlers.ofString()).statusCode()).isEqualTo(401);
+        assertThat(adminScans(http, "beavium", null, true).statusCode()).isEqualTo(200);
+        long oldA = mapRunId("metin2_map_a1"), c = mapRunId("metin2_map_c1");
+        String update = "{\"maps\":[" + selectMap("metin2_map_a1", true, oldA) + "," + selectMap("metin2_map_b1", false, null) + "]}";
+        assertThat(adminScans(http, "beavium", update, false).statusCode()).isEqualTo(403);
+        assertThat(adminScans(http, "beavium", update, true).statusCode()).isEqualTo(200);
+        results = getJson(http, "/api/v1/servers/beavium/items?size=100");
+        assertThat(results.path("items").findValues("unitPrice").stream().map(JsonNode::asInt).toList()).containsExactly(10,30);
+        assertThat(getJson(http, "/api/v1/servers/beavium/items/suggestions?query=metin2_map_b1").path("totalMatches").asLong()).isZero();
+        assertThat(getJson(http, "/api/v1/servers/beavium/items/bonus-options").findValues("type").stream().map(JsonNode::asInt).toList()).doesNotContain(20);
+        assertThat(getJson(http, "/api/v1/servers/beavium/items/overview").path("maps")).hasSize(2);
+        assertThat(getJson(http, "/api/v1/servers/beavium/items/map-options")).hasSize(2);
+        assertThat(getJson(http, "/api/v1/servers/beavium/items?map=metin2_map_b1").path("totalElements").asLong()).isZero();
+        // Invalid second selection rolls back the first, too.
+        String invalid = "{\"maps\":[" + selectMap("metin2_map_b1", true, null) + "," + selectMap("metin2_map_a1", true, c) + "]}";
+        assertThat(adminScans(http, "beavium", invalid, true).statusCode()).isEqualTo(409);
+        assertThat(getJson(http, "/api/v1/servers/beavium/items").path("totalElements").asLong()).isEqualTo(2);
+        assertThat(adminScans(http, "elder", "{\"maps\":["+selectMap("metin2_map_a1",true,oldA)+"]}",true).statusCode()).isEqualTo(409);
+        assertThat(postImport(http, path, "beavium-test-token", mapPayload("new-b", "metin2_map_b1", 3, 25, 1, 1, true)).statusCode()).isEqualTo(200);
+        assertThat(getJson(http, "/api/v1/servers/beavium/items").path("totalElements").asLong()).isEqualTo(2);
+        String restore = "{\"maps\":[" + selectMap("metin2_map_a1", true, null) + "," + selectMap("metin2_map_b1", true, null) + "]}";
+        assertThat(adminScans(http,"beavium",restore,true).statusCode()).isEqualTo(200);
+        assertThat(getJson(http, "/api/v1/servers/beavium/items?size=100").path("items").findValues("unitPrice").stream().map(JsonNode::asInt).toList()).containsExactly(15,25,30);
+    }
+
+    @Test
+    void batchedMapImportKeepsPreviousSnapshotUntilCompleteAndRejectsMixedMapData() throws Exception {
+        var http = HttpClient.newHttpClient(); String path = "/internal/v1/servers/beavium/imports";
+        assertThat(postImport(http,path,"beavium-test-token",mapPayload("old-a","metin2_map_a1",1,10,1,1,true)).statusCode()).isEqualTo(200);
+        String pending = mapPayload("pending-a","metin2_map_a1",2,15,2,1,true);
+        assertThat(postImport(http,path,"beavium-test-token",pending).statusCode()).isEqualTo(200);
+        assertThat(postImport(http,path,"beavium-test-token",pending).statusCode()).isEqualTo(200);
+        assertThat(getJson(http,"/api/v1/servers/beavium/items").path("items").get(0).path("unitPrice").asInt()).isEqualTo(10);
+        long incomplete = mapRunId("pending-a");
+        assertThat(adminScans(http,"beavium","{\"maps\":["+selectMap("metin2_map_a1",true,incomplete)+"]}",true).statusCode()).isEqualTo(409);
+        String last = mapPayload("pending-a","metin2_map_a1",2,15,2,2,false);
+        assertThat(postImport(http,path,"beavium-test-token",last.replace("metin2_map_a1","metin2_map_b1")).statusCode()).isEqualTo(409);
+        assertThat(postImport(http,path,"beavium-test-token",last).statusCode()).isEqualTo(200);
+        assertThat(getJson(http,"/api/v1/servers/beavium/items").path("totalElements").asLong()).isEqualTo(2);
+        assertThat(getJson(http,"/api/v1/servers/beavium/items").path("items").get(0).path("unitPrice").asInt()).isEqualTo(15);
+        // The same run ID cannot be reattached to another map.
+        assertThat(postImport(http,path,"beavium-test-token",pending.replace("pending-a-1","changed-batch").replace("metin2_map_a1","metin2_map_b1")).statusCode()).isEqualTo(409);
+    }
+
 }

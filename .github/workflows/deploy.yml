@@ -28,6 +28,9 @@ jobs:
       - name: Run tests
         run: bash mvnw test
 
+      - name: Run importer tests
+        run: python3 -m unittest discover -s tools -p test_import_sqlite.py
+
   deploy:
     needs: test
     runs-on: ubuntu-latest

@@ -17,6 +17,12 @@ public class CorsConfiguration implements WebMvcConfigurer {
 
     @Override
     public void addCorsMappings(CorsRegistry registry) {
+        // Caddy terminates HTTPS; the backend can see same-origin admin PUTs as
+        // cross-origin. Permit PUT only on the authenticated private endpoints.
+        registry.addMapping("/api/v1/admin/**")
+                .allowedOriginPatterns(allowedOriginPatterns.toArray(String[]::new))
+                .allowedMethods("GET", "PUT")
+                .allowedHeaders("Content-Type", "X-Admin-Action");
         registry.addMapping("/api/**")
                 .allowedOriginPatterns(allowedOriginPatterns.toArray(String[]::new))
                 .allowedMethods("GET")

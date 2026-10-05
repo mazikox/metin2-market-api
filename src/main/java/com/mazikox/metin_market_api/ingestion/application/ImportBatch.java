@@ -41,7 +41,9 @@ public class ImportBatch {
         int importedListings = 0;
 
         for (ImportRequest.ScanRun run : request.runs()) {
-            importedRuns += repository.upsertScanRun(request.sourceId(), run);
+            int affected = repository.upsertScanRun(request.sourceId(), run);
+            if (affected == 0) throw new ImportConflictException("An existing scan cannot change map");
+            importedRuns += affected;
         }
 
         for (ImportRequest.Observation observation : request.observations()) {
@@ -51,8 +53,14 @@ public class ImportBatch {
                         + observation.listings().size() + " listings");
             }
             String observationHash = hash(observation);
-            Long runPk = observation.runId() == null ? null : repository.findScanRunId(request.sourceId(), observation.runId())
-                    .orElseThrow(() -> new ImportConflictException("Observation references unknown run " + observation.runId()));
+            Long runPk = null;
+            if (observation.runId() != null) {
+                var run = repository.findScanRun(request.sourceId(), observation.runId())
+                        .orElseThrow(() -> new ImportConflictException("Observation references unknown run " + observation.runId()));
+                if (!run.mapId().equals(observation.mapId()))
+                    throw new ImportConflictException("Observation map differs from scan map");
+                runPk = run.id();
+            }
 
             Long observationPk = repository.insertObservation(request.sourceId(), runPk, observation, observationHash)
                     .orElse(null);

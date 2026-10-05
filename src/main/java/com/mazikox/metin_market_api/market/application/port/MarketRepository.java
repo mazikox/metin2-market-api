@@ -46,5 +46,7 @@ public interface MarketRepository {
 
     List<RawListing> findCanonicalListings(List<Integer> vnums);
 
+    List<RawListing> findCanonicalListings(List<Integer> vnums, List<String> maps);
+
     MarketOverview findMarketOverview(int limit, MarketOverviewSort sort);
 }

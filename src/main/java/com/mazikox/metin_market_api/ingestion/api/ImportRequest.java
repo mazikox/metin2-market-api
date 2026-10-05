@@ -25,7 +25,9 @@ public record ImportRequest(
             @PositiveOrZero int totalTargets,
             @PositiveOrZero int visitedTargets,
             @PositiveOrZero int failedTargets,
-            Boolean publishable) {
+            Boolean publishable,
+            @com.fasterxml.jackson.annotation.JsonInclude(com.fasterxml.jackson.annotation.JsonInclude.Include.NON_NULL)
+            @PositiveOrZero Integer expectedObservations) {
         public boolean isPublishable() {
             return Boolean.TRUE.equals(publishable);
         }

@@ -56,7 +56,8 @@ public class ItemSearchController {
             @RequestParam(required = false) @Size(max = BonusFilter.MAX_FILTERS) List<String> bonus,
             @RequestParam(required = false) String category,
             @RequestParam(required = false) @Min(0) Integer minLevel,
-            @RequestParam(required = false) @Min(0) Integer maxLevel) {
+            @RequestParam(required = false) @Min(0) Integer maxLevel,
+            @RequestParam(name="map", required=false) @Size(max=10) List<@Pattern(regexp="[A-Za-z0-9_-]{1,128}") String> maps) {
         List<Integer> selected = vnum == null ? List.of() : vnum.stream().distinct().toList();
         OfferSort offerSort = switch (sort) {
             case "priceAsc" -> OfferSort.PRICE_ASC;
@@ -75,7 +76,7 @@ public class ItemSearchController {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid bonus filters");
         }
         ItemFilters itemFilters;
-        try { itemFilters = new ItemFilters(ItemCategory.parse(category), minLevel, maxLevel); }
+        try { itemFilters = new ItemFilters(ItemCategory.parse(category), minLevel, maxLevel, maps); }
         catch (IllegalArgumentException e) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid category or level range");
         }
@@ -93,7 +94,10 @@ public class ItemSearchController {
 
     @GetMapping("/statistics")
     public ItemPriceStatisticsResponse statistics(
-            @RequestParam("vnum") @Size(min = 1, max = MAX_VNUMS) List<@Min(1) Integer> vnum) {
-        return getItemStatistics.getStatistics(vnum.stream().distinct().toList());
+            @RequestParam("vnum") @Size(min = 1, max = MAX_VNUMS) List<@Min(1) Integer> vnum,
+            @RequestParam(name="map", required=false) @Size(max=10) List<@Pattern(regexp="[A-Za-z0-9_-]{1,128}") String> maps) {
+        var selectedMaps = ItemFilters.normalizeMaps(maps);
+        return selectedMaps.isEmpty() ? getItemStatistics.getStatistics(vnum.stream().distinct().toList())
+                : getItemStatistics.getStatistics(vnum.stream().distinct().toList(), selectedMaps);
     }
 }

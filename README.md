@@ -188,3 +188,57 @@ search behavior includes offers with unknown metadata. The web UI disables
 category/level filtering when no catalog exists for that server. The existing
 V4 catalog indexes support these parameterized EXISTS predicates; no migration
 or scan rerun is required.
+
+
+## Markets per map and private scan management
+
+V6/V7 keep one active completed, publishable, fully imported scan per map in
+**each server schema**. Default mode follows the newest eligible scan by end
+time, start time and ID. Importing another map retains the other maps' scans.
+Joan's `metin2_map_a1_summer` shares the `metin2_map_a1` market. Shop VID
+deduplication is scoped to map and channel. Offers, price statistics, bonuses,
+suggestions and overview all use `market_canonical_observation`.
+
+`GET /api/v1/admin/servers/{server}/scans` returns map configuration and up to
+100 newest scans per map, plus any pinned older scan. `PUT` on the same URL
+accepts `{"maps":[{"mapId":"metin2_map_a1","enabled":false,"selectedScanId":null}]}`.
+Only listed maps change, atomically. Null selection follows the latest scan;
+a numeric ID pins an eligible scan from that server and map. Disabled maps stay
+hidden after new imports. Invalid, incomplete, unpublished or other-map scan
+selections fail without changing any map. Settings are persisted in
+`market_map_selection`, independently of imports. No scan data is deleted.
+
+The `/admin/scans` page reuses `/admin/stats`' Caddy Basic Auth credentials,
+not scanner credentials. Caddy's existing `/admin/*` and `/api/v1/admin/*` rules
+protect it. The backend also verifies the trusted proxy token and authenticated
+admin header; writes require `X-Admin-Action: scan-selection`, JSON, and reject
+cross-site browser requests. CORS permits PUT only on the private admin routes.
+
+The updated SQLite importer accepts repeated `--map` with `--latest-completed`:
+
+```powershell
+python tools/import_sqlite.py --server beavium --database history.db --source-id eldersuite-beavium-main --latest-completed --publishable --map metin2_map_a1 --map metin2_map_b1 --map metin2_map_c1
+```
+
+Pass just one or two `--map` flags for the maps requested by the operator.
+For separate SQLite files, run once per file with that file's map. Keep a stable
+source ID and use the matching scanner token environment variable. All requested
+maps are validated and read before the first network request. `--dry-run` sends
+nothing and SQLite is always opened read-only. Existing `--run-id` and unfiltered
+`--latest-completed` remain single-run modes.
+
+New imports send `expectedObservations` in run metadata. A transactionally
+maintained count exposes the run only once all observations have arrived.
+A failed/midway import keeps the previous eligible scan visible; retrying resumes
+without duplicate observations. The `sqlite-v2-` batch prefix avoids conflicts
+with earlier manifest-free imports. Historical imports without a manifest remain
+compatible. Agents/direct clients should always send the expected observation
+count for new batched imports. An empty complete scan (expected count zero) is
+valid and replaces that map's old offers.
+
+Public offer and statistics endpoints accept repeated `map` parameters, e.g.
+`items?map=metin2_map_a1&map=metin2_map_c1&bonus=11:20`. Filtering is applied before
+grouping, sorting, pagination and total counts. No parameter means all active
+maps. `/items/map-options` lists only active maps. The web groups map, category,
+level and extra bonus conditions in one expandable panel. Price statistics
+respect selected maps while still covering all extra bonuses of an item.

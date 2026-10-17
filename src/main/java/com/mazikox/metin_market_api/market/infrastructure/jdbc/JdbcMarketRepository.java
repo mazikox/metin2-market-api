@@ -39,7 +39,7 @@ public class JdbcMarketRepository implements MarketRepository {
                 WITH latest_run AS (
                     SELECT id, ended_at FROM market_active_scan
                     ORDER BY ended_at DESC NULLS LAST, started_at DESC, id DESC LIMIT 1
-                ), canonical_observations AS (SELECT * FROM market_canonical_observation), item_totals AS (
+                ), canonical_observations AS MATERIALIZED (SELECT * FROM market_canonical_observation), item_totals AS (
                     SELECT l.item_vnum, l.item_name,
                            count(DISTINCT o.id) AS shop_count,
                            sum(l.quantity)::bigint AS total_quantity,
@@ -109,7 +109,7 @@ public class JdbcMarketRepository implements MarketRepository {
         }
         if (!itemFilters.maps().isEmpty()) filter += " AND o.market_map_id IN (:maps)";
         String baseCte = """
-                WITH canonical_observations AS (SELECT * FROM market_canonical_observation), matching_listings AS (
+                WITH canonical_observations AS MATERIALIZED (SELECT * FROM market_canonical_observation), matching_listings AS MATERIALIZED (
                     SELECT l.id, l.observation_id, l.item_vnum, l.item_name, l.quantity,
                            l.price_raw, l.unit_price, l.tail_field,
                            o.shop_vid, o.shop_title, o.owner_name, o.map_id, o.channel,

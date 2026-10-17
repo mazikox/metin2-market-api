@@ -1,6 +1,7 @@
 services:
   postgres:
     image: postgres:18-alpine
+    restart: unless-stopped
     environment:
       POSTGRES_DB: metin_market
       POSTGRES_USER: metin_market
@@ -17,6 +18,7 @@ services:
 
   api:
     build: .
+    restart: unless-stopped
     environment:
       ANALYTICS_ENABLED: "true"
       ANALYTICS_SECRET: ${ANALYTICS_SECRET:?ANALYTICS_SECRET is required}
